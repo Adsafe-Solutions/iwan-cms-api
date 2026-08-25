@@ -30,8 +30,24 @@ copy, so the seeded database is exactly what the site ships today. It upserts on
 slug, so it is safe to re-run; `npm run seed:reset` empties the content
 collections first and never touches user accounts.
 
-⚠ **A seed OVERWRITES.** Once real content is being written in the CMS, name the
-type you actually mean:
+⚠⚠ **THERE IS ONE DATABASE, AND IT IS THE LIVE ONE.**
+
+There is no dev/prod split — `iwan_cms` on the Atlas cluster is what the
+deployed API serves AND what your machine connects to. That is a deliberate
+choice for an organisation this size, but it removes the guard that used to make
+the seed safe, so two things are now true that were not before:
+
+- `npm run seed` **overwrites live content** with whatever the static files say.
+- `npm run seed:reset` **deletes live content first**. There is nothing to fall
+  back to.
+
+Take a backup before either:
+
+```bash
+mongodump --uri="$MONGODB_URI" --out=./backup-$(date +%F)
+```
+
+⚠ **A seed OVERWRITES.** Name the type you actually mean:
 
 ```bash
 npm run seed -- --only=blogs       # blogs · events · podcast · promos
@@ -137,9 +153,13 @@ protect more than marketing copy.
 Build `npm ci`, start `npm start`, health check path `/health`. Set `NODE_ENV`,
 `MONGODB_URI`, `JWT_SECRET` and `CORS_ORIGINS` in the service's environment.
 
-Use a **separate database per environment** (`iwan_cms_dev` / `iwan_cms`) so a
-seed or a reset on one can never touch the other, and a separate Render service
-for each, mirroring how the public site runs two independent Workers.
+⚠ **One database, one service.** `iwan_cms` on the Atlas cluster is the whole
+thing — the deployed API and local development both use it. Simpler to run, and
+honest about the scale this operates at; the cost is that there is no safe place
+to try a destructive command, so see the warning above about seeding.
+
+Split it the day two people are editing content at once, or the day you want to
+try a schema change against real data without risking it.
 
 `config.js` refuses to boot in production on a missing `MONGODB_URI`, a missing
 or placeholder `JWT_SECRET`, or an empty `CORS_ORIGINS` — an API no browser could
