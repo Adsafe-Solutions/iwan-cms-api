@@ -12,7 +12,25 @@
    needs network once; afterwards it is cached. */
 
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";
+
+/* Generated per run, never written as literals.
+
+   These only ever exist inside a throwaway in-memory database that is destroyed
+   when the run ends, so a fixed string would leak nothing. They are generated
+   anyway for two reasons: a password-shaped literal in a committed file is
+   indistinguishable from a real one at a glance, and secret scanners cannot
+   tell either. Nothing here should need a human to check.
+
+   Long enough to clear the 10-character floor the API enforces on account
+   creation — a shorter one would fail validation rather than the thing under
+   test. */
+const secret = () => randomBytes(12).toString("base64url");
+
+const ADMIN_PASSWORD = secret();
+const HANDLE_PASSWORD = secret();
+const EDITOR_PASSWORD = secret();
 
 process.env.NODE_ENV = "test";
 process.env.JWT_SECRET = "smoke-test-secret-that-is-long-enough-to-pass";
@@ -70,7 +88,7 @@ await check("GET /health reports a connected database", async () => {
 await User.create({
   email: "smoke@iwan.community",
   name: "Smoke",
-  passwordHash: await User.hashPassword("a-long-enough-password"),
+  passwordHash: await User.hashPassword(ADMIN_PASSWORD),
   role: "admin",
 });
 
@@ -85,7 +103,7 @@ let token = null;
 
 await check("signing in returns a token", async () => {
   const { status, body } = await call("POST", "/api/auth/login", {
-    body: { email: "smoke@iwan.community", password: "a-long-enough-password" },
+    body: { email: "smoke@iwan.community", password: ADMIN_PASSWORD },
   });
   assert.equal(status, 200);
   assert.ok(body.token);
@@ -98,28 +116,28 @@ await check("signing in returns a token", async () => {
 await check("an account can sign in with a username instead of an email", async () => {
   await User.create({
     email: "handle@iwan.community",
-    username: "admin2026",
+    username: "smoke-handle",
     name: "Handle",
-    passwordHash: await User.hashPassword("Admin@12345"),
+    passwordHash: await User.hashPassword(HANDLE_PASSWORD),
     role: "admin",
   });
 
   const byName = await call("POST", "/api/auth/login", {
-    body: { email: "admin2026", password: "Admin@12345" },
+    body: { email: "smoke-handle", password: HANDLE_PASSWORD },
   });
   assert.equal(byName.status, 200, "username login refused");
-  assert.equal(byName.body.user.username, "admin2026");
+  assert.equal(byName.body.user.username, "smoke-handle");
 
   /* The email still works for the same account — one is not a replacement
      for the other. */
   const byEmail = await call("POST", "/api/auth/login", {
-    body: { email: "handle@iwan.community", password: "Admin@12345" },
+    body: { email: "handle@iwan.community", password: HANDLE_PASSWORD },
   });
   assert.equal(byEmail.status, 200, "email login broke");
 
   /* And a wrong password is still refused, whichever identifier is used. */
   const bad = await call("POST", "/api/auth/login", {
-    body: { email: "admin2026", password: "nope" },
+    body: { email: "smoke-handle", password: "definitely-not-it" },
   });
   assert.equal(bad.status, 401);
 });
@@ -132,7 +150,7 @@ await check("accounts with no username do not collide", async () => {
       token,
       body: {
         email: `nameless${n}@iwan.community`,
-        password: "a-long-enough-password",
+        password: ADMIN_PASSWORD,
         role: "editor",
       },
     });
@@ -832,13 +850,13 @@ await check("a scoped editor cannot write outside their countries", async () => 
     token,
     body: {
       email: "india@iwan.community",
-      password: "another-long-password",
+      password: EDITOR_PASSWORD,
       role: "editor",
       countries: ["in"],
     },
   });
   const { body: session } = await call("POST", "/api/auth/login", {
-    body: { email: "india@iwan.community", password: "another-long-password" },
+    body: { email: "india@iwan.community", password: EDITOR_PASSWORD },
   });
 
   const denied = await call("POST", "/api/admin/events", {
@@ -873,11 +891,11 @@ await check("a scoped editor cannot write outside their countries", async () => 
 
 await check("an editor cannot create accounts", async () => {
   const { body: session } = await call("POST", "/api/auth/login", {
-    body: { email: "india@iwan.community", password: "another-long-password" },
+    body: { email: "india@iwan.community", password: EDITOR_PASSWORD },
   });
   const { status } = await call("POST", "/api/admin/users", {
     token: session.token,
-    body: { email: "x@y.com", password: "yet-another-password" },
+    body: { email: "x@y.com", password: secret() },
   });
   assert.equal(status, 403);
 });

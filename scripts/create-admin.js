@@ -1,14 +1,3 @@
-/* Creates (or resets) the first admin account, since there is no public
-   sign-up and no way to make the very first user through the API.
-
-   Reads ADMIN_EMAIL / ADMIN_PASSWORD / ADMIN_NAME from the environment:
-
-     ADMIN_EMAIL=you@iwan.community ADMIN_PASSWORD='…' npm run create:admin
-
-   Running it again for an existing email RESETS that account's password and
-   makes sure it is an active admin — which is also the way back in when
-   somebody is locked out. */
-
 import mongoose from "mongoose";
 import { assertConfig, isProduction } from "../src/config.js";
 import { connectDb, disconnectDb } from "../src/db.js";

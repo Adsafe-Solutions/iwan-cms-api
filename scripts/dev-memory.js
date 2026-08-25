@@ -13,18 +13,26 @@
    from a deployed build. */
 
 import "dotenv/config";
+import { randomBytes } from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";
 
-/* ⚠ NOT the real password. This file is committed, so a credential written
-   here is a published credential — and the account it opens is a real one on
-   whatever database `npm run dev` is pointed at, because the same login is used
-   for both by design.
+/* ⚠ NO CREDENTIAL IS WRITTEN IN THIS FILE.
 
-   The default below is deliberately obvious rubbish. Set ADMIN_PASSWORD in your
-   (gitignored) .env to use your actual one and keep the two in step. */
-const EMAIL = process.env.ADMIN_EMAIL || "admin2026@iwan.community";
-const USERNAME = process.env.ADMIN_USERNAME || "admin2026";
-const PASSWORD = process.env.ADMIN_PASSWORD || "dev-only-not-a-real-password";
+   It is committed, so anything hard-coded here is published — and worse, the
+   account it opens is a real one, because the same login is used against
+   whatever database `npm run dev` points at.
+
+   So: taken from the environment when set (your gitignored .env), and otherwise
+   GENERATED FRESH each boot and printed in the banner below. A generated one
+   changes every restart, which is mildly annoying and exactly the nudge to put
+   your own in .env.
+
+   The email and username are not secrets, but they are defaulted to something
+   obviously local rather than to a real account. */
+const EMAIL = process.env.ADMIN_EMAIL || "dev@localhost";
+const USERNAME = process.env.ADMIN_USERNAME || "dev";
+const PASSWORD = process.env.ADMIN_PASSWORD || randomBytes(9).toString("base64url");
+const GENERATED = !process.env.ADMIN_PASSWORD;
 
 const mongod = await MongoMemoryServer.create();
 
@@ -64,7 +72,7 @@ createApp().listen(CONFIG.port, () => {
 │
 │  Sign in with
 │    ${USERNAME}   (or ${EMAIL})
-│    ${PASSWORD}
+│    ${PASSWORD}${GENERATED ? "   ← generated; set ADMIN_PASSWORD in .env to fix it" : ""}
 │
 │  ⚠ Everything is lost when this process stops.
 └───────────────────────────────────────────────────────────
