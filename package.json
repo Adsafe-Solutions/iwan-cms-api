@@ -1,0 +1,40 @@
+{
+  "name": "iwan-cms-api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CMS API for iwan.community — events, blogs, podcasts and promos, per country",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "seed": "node scripts/seed.js",
+    "seed:reset": "node scripts/seed.js --reset",
+    "create:admin": "node scripts/create-admin.js",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "smoke": "node scripts/smoke.js",
+    "dev:memory": "node scripts/dev-memory.js",
+    "migrate:blog-html": "node scripts/migrate-blog-html.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.5",
+    "morgan": "^1.10.0",
+    "sanitize-html": "^2.17.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.2.0",
+    "prettier": "3.9.6"
+  }
+}

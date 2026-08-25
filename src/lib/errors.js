@@ -1,0 +1,32 @@
+/* Errors thrown anywhere in a route land in middleware/error.js, which turns an
+   HttpError into its status and anything else into a 500. Routes therefore just
+   `throw notFound("No such event")` and never build a response by hand. */
+export class HttpError extends Error {
+  constructor(status, message, details) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+    if (details) this.details = details;
+  }
+}
+
+export const badRequest = (message = "Bad request", details) =>
+  new HttpError(400, message, details);
+
+export const unauthorized = (message = "Not signed in") => new HttpError(401, message);
+
+export const forbidden = (message = "Not allowed") => new HttpError(403, message);
+
+export const notFound = (message = "Not found") => new HttpError(404, message);
+
+export const conflict = (message = "Already exists", details) =>
+  new HttpError(409, message, details);
+
+/* Express 4 does not forward a rejected promise from an async handler to the
+   error middleware — it hangs the request instead. Every async route is wrapped
+   in this so a thrown error always reaches the handler. */
+export const wrap = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
+export default HttpError;
