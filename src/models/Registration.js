@@ -71,6 +71,19 @@ const registrationSchema = new mongoose.Schema(
     /* An organiser's private note — "called, coming with two kids". Never shown
        to the person who registered. */
     note: { type: String, trim: true, default: "" },
+
+    /* ⚠ Written only on a CONFIRMED SEND, never on an attempt. The whole value
+       of this field to an organiser is answering "did this person actually get
+       their email?", and a timestamp that also recorded failures would answer a
+       different question while looking like it answered that one.
+
+       Stamped by the public sign-up route as well as by the admin's resend, so
+       a registration that has never been touched by hand still reads correctly
+       rather than claiming nothing was ever sent. Anyone who registered before
+       this field existed has no stamp and is shown as unknown — which is the
+       honest answer, not "never sent". */
+    confirmationSentAt: { type: Date, default: null },
+    confirmationSentCount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -16,10 +16,16 @@ const resend = CONFIG.resendApiKey ? new Resend(CONFIG.resendApiKey) : null;
 export const MAIL_ENABLED = Boolean(resend && CONFIG.mailFrom);
 
 /* The event's own date, printed as written. `date` is a plain day string, not a
-   timestamp, so there is no timezone to convert between. */
-const formatWhen = (event = {}) => {
-  const time = [event.start, event.end].filter(Boolean).join("–");
-  return [event.date, time].filter(Boolean).join(", ");
+   timestamp, so there is no timezone to convert between.
+
+   ⚠ `?? {}` rather than a default parameter. A default only fills in for
+   `undefined`, and the admin's resend passes the result of a findById — which
+   is NULL when the event has since been deleted. The registration itself
+   survives that deletion and can still be re-sent, so this has to cope. */
+const formatWhen = (event) => {
+  const e = event ?? {};
+  const time = [e.start, e.end].filter(Boolean).join("–");
+  return [e.date, time].filter(Boolean).join(", ");
 };
 
 /**

@@ -128,8 +128,31 @@ router.post(
        latency to every sign-up, and making the 201 depend on it would turn a
        mail outage into an error the person retries — putting a second copy of
        them in the database. sendRegistrationConfirmation never throws, so this
-       cannot reject into `wrap` and try to respond twice. */
-    void sendRegistrationConfirmation({ registration, event });
+       cannot reject into `wrap` and try to respond twice.
+
+       The stamp that follows is what lets the CMS tell an organiser whether
+       this person was ever written to — without it, everyone who signed up
+       normally would show as never contacted and the Resend button would be
+       pressed on people who already had their email. ⚠ `updateOne` rather than
+       saving the document: this runs after the response, and re-saving a doc
+       an admin may have edited in between would write back the stale copy
+       captured in this closure. The `.catch` is not optional either — an
+       unhandled rejection here would be a failed stamp taking the process down
+       with it, long after the sign-up itself succeeded. */
+    void sendRegistrationConfirmation({ registration, event })
+      .then((result) => {
+        if (!result.sent) return null;
+        return Registration.updateOne(
+          { _id: registration._id },
+          {
+            $set: { confirmationSentAt: new Date() },
+            $inc: { confirmationSentCount: 1 },
+          }
+        );
+      })
+      .catch((err) => {
+        console.error("Could not record the confirmation send:", err);
+      });
   })
 );
 

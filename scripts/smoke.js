@@ -36,6 +36,22 @@ process.env.NODE_ENV = "test";
 process.env.JWT_SECRET = "smoke-test-secret-that-is-long-enough-to-pass";
 process.env.CORS_ORIGINS = "";
 
+/* ⚠ EMPTIED, not left to the environment, and this is not tidiness.
+
+   config.js does `import "dotenv/config"`, so a developer with a working
+   RESEND_API_KEY in their .env had this suite making LIVE calls to the Resend
+   API on every run: each registration below fired a real send. They bounced
+   only because the fixtures use example.com and Resend refuses that domain —
+   change a fixture to a deliverable address and `npm run smoke` emails a real
+   person. A test run must not be able to send mail to anyone.
+
+   Assigning "" rather than deleting is what makes it stick: dotenv only fills
+   in keys that are ABSENT from process.env, so an empty-but-present key is left
+   alone. This is also the switched-off state lib/mail.js documents, which is
+   what the resend checks further down assert against. */
+process.env.RESEND_API_KEY = "";
+process.env.MAIL_FROM = "";
+
 const mongod = await MongoMemoryServer.create();
 process.env.MONGODB_URI = mongod.getUri("iwan_cms_smoke");
 
@@ -736,6 +752,70 @@ await check("⚠ a CSV answer cannot become a spreadsheet formula", async () => 
   /* Excel treats a leading = as a formula. It must be neutralised. */
   assert.ok(!/,=HYPERLINK/.test(csv), "a formula survived into the CSV");
   assert.match(csv, /'=HYPERLINK/);
+});
+
+console.log("\nresending a confirmation");
+
+/* ⚠ WHAT THIS RUN CANNOT COVER, stated so the gap is not mistaken for cover.
+
+   The smoke environment sets no RESEND_API_KEY, so MAIL_ENABLED is false and
+   every resend stops at the first guard. That is deliberate — a test suite that
+   really sent mail would need either a live provider or a stub standing in for
+   one, and a stub asserting against itself proves nothing about Resend. So the
+   successful send, the "no email address" refusal and the "cancelled" refusal
+   are all UNTESTED here and have to be exercised by hand against a deployment
+   that has mail configured. What IS tested is that the route exists, is behind
+   the sign-in, and fails loudly with a reason rather than silently claiming to
+   have sent something. */
+
+await check("resending needs a sign-in", async () => {
+  const { body: list } = await call("GET", "/api/admin/registrations?event=fishing-day", {
+    token,
+  });
+  const { status } = await call(
+    "POST",
+    `/api/admin/registrations/${list.items[0].id}/resend`
+  );
+  assert.equal(status, 401);
+});
+
+await check("resending for an unknown registration is a 404", async () => {
+  /* A well-formed ObjectId that belongs to nothing — a malformed one would be
+     caught as a cast error instead and prove something different. */
+  const { status } = await call(
+    "POST",
+    "/api/admin/registrations/0123456789abcdef01234567/resend",
+    { token }
+  );
+  assert.equal(status, 404);
+});
+
+await check("⚠ with mail switched off, resending SAYS SO rather than lying", async () => {
+  const { body: list } = await call("GET", "/api/admin/registrations?event=fishing-day", {
+    token,
+  });
+  const { status, body } = await call(
+    "POST",
+    `/api/admin/registrations/${list.items[0].id}/resend`,
+    { token }
+  );
+  /* The failure that matters: an editor pressing Resend on a server with no
+     mail provider must be told, not shown a success toast. */
+  assert.equal(status, 400);
+  assert.match(body.error, /not configured/i);
+});
+
+await check("a registration reports what is known about its confirmation", async () => {
+  const { body } = await call("GET", "/api/admin/registrations?event=fishing-day", {
+    token,
+  });
+  const row = body.items[0];
+  /* Serialised for the CMS even when nothing was ever sent — the column has to
+     exist for the screen to say "no record" rather than render undefined. */
+  assert.ok("confirmationSentAt" in row, "confirmationSentAt is not serialised");
+  assert.equal(row.confirmationSentCount, 0);
+  /* Nothing was sent, so nothing may claim it was. */
+  assert.equal(row.confirmationSentAt, null);
 });
 
 console.log("\nthe programme filter");

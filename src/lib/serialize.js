@@ -263,6 +263,11 @@ export const adminRegistration = (doc) => ({
   name: doc.name ?? "",
   email: doc.email ?? "",
   note: doc.note ?? "",
+  /* Null means no confirmation is on record — either none was sent or the
+     registration predates the field. The CMS says "unknown" rather than
+     "never", because it cannot tell those apart. */
+  confirmationSentAt: doc.confirmationSentAt ?? null,
+  confirmationSentCount: doc.confirmationSentCount ?? 0,
   answers: (doc.answers ?? []).map((a) => ({
     key: a.key,
     label: a.label,
