@@ -1,8 +1,8 @@
 import "dotenv/config";
 
-/* Everything this service reads from the environment, in one place, validated
-   at boot rather than at the first request that happens to need it — a missing
-   MONGODB_URI should stop the process, not surface as a 500 an hour later. */
+/* Everything read from the environment, validated at boot rather than at the
+   first request that needs it — a missing MONGODB_URI should stop the process,
+   not surface as a 500 an hour later. */
 
 const list = (value = "") =>
   value
@@ -18,27 +18,22 @@ export const CONFIG = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   corsOrigins: list(process.env.CORS_ORIGINS),
 
-  /* Transactional mail — see lib/mail.js.
-     ⚠ UNSET IS THE SWITCHED-OFF STATE. Without a key nothing is sent and
-     registration behaves exactly as it did before confirmations existed, so a
-     deployment that has not been given one still takes sign-ups. */
+  /* ⚠ UNSET IS THE SWITCHED-OFF STATE — see lib/mail.js. A deployment without
+     a key still takes sign-ups; it just sends nothing. */
   resendApiKey: process.env.RESEND_API_KEY ?? "",
-  /* The From address. Resend requires its domain to be verified in the Resend
-     dashboard first — until then only `onboarding@resend.dev` will send, and
-     only to the address that owns the Resend account. */
+  /* ⚠ Resend requires this domain to be verified in its dashboard first. Until
+     then only `onboarding@resend.dev` sends, and only to the account owner. */
   mailFrom: process.env.MAIL_FROM ?? "",
   mailReplyTo: process.env.MAIL_REPLY_TO ?? "",
-  /* Used to build the event link inside the confirmation. Optional: with no
-     site URL the mail simply omits the link. */
+  /* Builds the event link in the confirmation. Optional — the mail omits it. */
   siteUrl: process.env.SITE_URL ?? "",
 };
 
 export const isProduction = CONFIG.env === "production";
 
-/* ⚠ A weak or absent JWT secret is only fatal in production. Local work should
-   not need a secret generated before the server will start, but a deployment
-   running on the .env.example placeholder would let anyone mint a valid admin
-   token, so that is refused outright. */
+/* ⚠ A weak secret is fatal only in production: local work should not need one
+   generated first, but a deployment on the .env.example placeholder would let
+   anyone mint a valid admin token. */
 const PLACEHOLDER_SECRET = "change-me-to-a-long-random-string";
 
 export function assertConfig() {
@@ -59,10 +54,9 @@ export function assertConfig() {
     problems.push("CORS_ORIGINS is empty — no browser origin could reach this API");
   }
 
-  /* ⚠ Half-configured mail is the one state worth refusing, in any environment:
-     a key with no From address means every send fails at the point where
-     someone has just been told their place is booked. Neither being set is
-     fine — that is mail switched off. */
+  /* ⚠ Half-configured mail is refused everywhere: a key with no From address
+     fails every send just after someone is told their place is booked. Neither
+     being set is fine — that is mail switched off. */
   if (CONFIG.resendApiKey && !CONFIG.mailFrom) {
     problems.push("RESEND_API_KEY is set but MAIL_FROM is not — mail cannot send");
   }

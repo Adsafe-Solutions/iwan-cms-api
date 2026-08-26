@@ -4,10 +4,9 @@ import { bearerFrom, verifyToken } from "../lib/tokens.js";
 
 /* Verifies the bearer token and loads the account behind it.
 
-   ⚠ The user is re-read from the database on every request rather than trusted
-   from the token's claims. That is one indexed lookup, and it is what makes
-   deactivating an account or changing its role take effect immediately instead
-   of whenever the token happens to expire. */
+   ⚠ Re-read from the database every request rather than trusted from the
+   token's claims — one indexed lookup, and what makes deactivating an account
+   take effect immediately rather than whenever the token expires. */
 export const requireAuth = wrap(async (req, _res, next) => {
   const token = bearerFrom(req);
   if (!token) throw unauthorized();
@@ -16,8 +15,8 @@ export const requireAuth = wrap(async (req, _res, next) => {
   try {
     claims = verifyToken(token);
   } catch {
-    /* Expired and malformed are the same answer on purpose — telling a caller
-       which one it was is free information for someone probing. */
+    /* Expired and malformed give the same answer — the difference is free
+       information for someone probing. */
     throw unauthorized("Session expired or invalid");
   }
 
@@ -33,15 +32,10 @@ export const requireAdmin = (req, _res, next) => {
   next();
 };
 
-/* Whether an account may write content for a given set of countries.
-
-   An `admin` may write anything. An `editor` with an EMPTY `countries` list is
-   likewise unscoped — that is the same "means everywhere" convention content
-   documents use. A scoped editor may only touch documents whose countries are a
-   subset of their own, which also means they cannot create or edit a GLOBAL
-   document: a global one shows in every country, including the ones they do not
-   have. Widening a document to a country they lack is refused for the same
-   reason. */
+/* Whether an account may write for a set of countries. An admin, or an editor
+   with an EMPTY list, is unscoped. A scoped editor may only touch documents
+   whose countries are a subset of their own — which also bars them from GLOBAL
+   documents, since those show in countries they do not have. */
 export const assertCountryScope = (user, countries = []) => {
   if (user.role === "admin") return;
   if (!user.countries || user.countries.length === 0) return;

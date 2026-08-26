@@ -14,13 +14,9 @@ async function main() {
   if (!email || !password) {
     throw new Error("Set ADMIN_EMAIL and ADMIN_PASSWORD");
   }
-  /* ⚠ The 10-character floor is enforced in PRODUCTION only.
-
-     Locally, a memorable throwaway password is worth more than a strong one:
-     the database is a dev database, the API is on localhost, and a floor that
-     makes people paste a random string into a chat window to share it is not
-     buying security. In production the same floor is absolute — that account
-     guards the live site's content and has no second factor behind it. */
+  /* ⚠ The 10-character floor is enforced in PRODUCTION only. Locally a
+     memorable throwaway is worth more than a strong one; in production the
+     floor is absolute, since that account has no second factor behind it. */
   const floor = isProduction ? 10 : 6;
   if (password.length < floor) {
     throw new Error(
@@ -57,7 +53,7 @@ async function main() {
       name,
       passwordHash,
       role: "admin",
-      /* Empty: an admin is unscoped and may edit every country. */
+      /* Empty: an admin is unscoped. */
       countries: [],
       active: true,
     });

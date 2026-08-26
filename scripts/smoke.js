@@ -1,31 +1,21 @@
-/* End-to-end smoke test against a throwaway in-memory MongoDB.
-
-   There is no test runner here, the same as in the public site's repo — this is
-   the check that the API is wired up: it boots the real app, seeds the real
-   content, signs in, writes through the admin routes and reads back through the
-   public ones, asserting that what comes out the public side is the shape the
-   site's components already expect.
+/* End-to-end smoke test against a throwaway in-memory MongoDB. No test runner:
+   it boots the real app, seeds real content, writes through the admin routes
+   and reads back through the public ones, asserting the public side is the
+   shape the site's components expect.
 
      npm run smoke
 
-   ⚠ The first run downloads a mongod binary (~100MB) into node_modules. It
-   needs network once; afterwards it is cached. */
+   ⚠ The first run downloads a mongod binary (~100MB). Network once, then
+   cached. */
 
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";
 
-/* Generated per run, never written as literals.
-
-   These only ever exist inside a throwaway in-memory database that is destroyed
-   when the run ends, so a fixed string would leak nothing. They are generated
-   anyway for two reasons: a password-shaped literal in a committed file is
-   indistinguishable from a real one at a glance, and secret scanners cannot
-   tell either. Nothing here should need a human to check.
-
-   Long enough to clear the 10-character floor the API enforces on account
-   creation — a shorter one would fail validation rather than the thing under
-   test. */
+/* Generated per run, never written as literals. A fixed string would leak
+   nothing from a throwaway database, but a password-shaped literal in a
+   committed file is indistinguishable from a real one — to a reader and to a
+   secret scanner. Long enough to clear the API's 10-character floor. */
 const secret = () => randomBytes(12).toString("base64url");
 
 const ADMIN_PASSWORD = secret();
@@ -36,19 +26,13 @@ process.env.NODE_ENV = "test";
 process.env.JWT_SECRET = "smoke-test-secret-that-is-long-enough-to-pass";
 process.env.CORS_ORIGINS = "";
 
-/* ⚠ EMPTIED, not left to the environment, and this is not tidiness.
-
-   config.js does `import "dotenv/config"`, so a developer with a working
-   RESEND_API_KEY in their .env had this suite making LIVE calls to the Resend
-   API on every run: each registration below fired a real send. They bounced
-   only because the fixtures use example.com and Resend refuses that domain —
-   change a fixture to a deliverable address and `npm run smoke` emails a real
-   person. A test run must not be able to send mail to anyone.
+/* ⚠ EMPTIED, not left to the environment, and not for tidiness: config.js loads
+   .env, so a developer with a real RESEND_API_KEY had this suite making LIVE
+   Resend calls on every run. They bounced only because the fixtures use
+   example.com — a deliverable address would email a real person.
 
    Assigning "" rather than deleting is what makes it stick: dotenv only fills
-   in keys that are ABSENT from process.env, so an empty-but-present key is left
-   alone. This is also the switched-off state lib/mail.js documents, which is
-   what the resend checks further down assert against. */
+   in keys ABSENT from process.env. */
 process.env.RESEND_API_KEY = "";
 process.env.MAIL_FROM = "";
 
@@ -758,15 +742,11 @@ console.log("\nresending a confirmation");
 
 /* ⚠ WHAT THIS RUN CANNOT COVER, stated so the gap is not mistaken for cover.
 
-   The smoke environment sets no RESEND_API_KEY, so MAIL_ENABLED is false and
-   every resend stops at the first guard. That is deliberate — a test suite that
-   really sent mail would need either a live provider or a stub standing in for
-   one, and a stub asserting against itself proves nothing about Resend. So the
-   successful send, the "no email address" refusal and the "cancelled" refusal
-   are all UNTESTED here and have to be exercised by hand against a deployment
-   that has mail configured. What IS tested is that the route exists, is behind
-   the sign-in, and fails loudly with a reason rather than silently claiming to
-   have sent something. */
+   Mail is switched off here, so every resend stops at the first guard: the
+   successful send and the "no email"/"cancelled" refusals are UNTESTED and need
+   exercising by hand against a deployment with mail configured. What IS tested
+   is that the route exists, is behind the sign-in, and fails loudly with a
+   reason rather than claiming to have sent something. */
 
 await check("resending needs a sign-in", async () => {
   const { body: list } = await call("GET", "/api/admin/registrations?event=fishing-day", {

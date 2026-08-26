@@ -1,15 +1,14 @@
 import mongoose from "mongoose";
 import { CONFIG } from "./config.js";
 
-/* One connection for the life of the process. Render runs this as a normal
-   long-lived Node service rather than a serverless function, so there is no
-   cold-start-per-request problem to cache around — connect once at boot and
-   let the driver's own pool handle concurrency. */
+/* One connection for the life of the process. This is a long-lived service,
+   not a serverless function, so there is nothing to cache around — connect once
+   and let the driver's pool handle concurrency. */
 export async function connectDb(uri = CONFIG.mongoUri) {
   mongoose.set("strictQuery", true);
 
-  /* Fail fast instead of the driver's 30s default: if Atlas is unreachable at
-     boot we want the deploy to go red immediately, not hang. */
+  /* Fail fast rather than the driver's 30s default, so an unreachable Atlas
+     turns the deploy red immediately instead of hanging. */
   await mongoose.connect(uri, { serverSelectionTimeoutMS: 10_000 });
 
   return mongoose.connection;

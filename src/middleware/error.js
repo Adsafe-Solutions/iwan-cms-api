@@ -6,13 +6,12 @@ export const notFoundHandler = (req, res) => {
   res.status(404).json({ error: `No route for ${req.method} ${req.originalUrl}` });
 };
 
-/* The single place a thrown error becomes a response. Mongoose and Zod both
-   report failures in their own shapes; each is translated here so a caller only
-   ever sees `{ error, details? }` with a sensible status.
+/* The single place a thrown error becomes a response: Mongoose and Zod shapes
+   are translated so a caller only sees `{ error, details? }`.
 
    ⚠ Express identifies an error handler by its ARITY — all four arguments must
-   stay in the signature even though `next` is unused, or Express registers this
-   as ordinary middleware and every error becomes an unhandled 500. */
+   stay even though `next` is unused, or this registers as ordinary middleware
+   and every error becomes an unhandled 500. */
 // eslint-disable-next-line no-unused-vars
 export const errorHandler = (err, _req, res, _next) => {
   if (err instanceof HttpError) {
@@ -42,8 +41,7 @@ export const errorHandler = (err, _req, res, _next) => {
     });
   }
 
-  /* Mongo's duplicate-key error. In practice this is always the unique slug, so
-     the message names the field rather than leaving the editor to guess. */
+  /* Always the unique slug in practice, so the message names the field. */
   if (err?.code === 11000) {
     const field = Object.keys(err.keyPattern ?? {})[0] ?? "value";
     return res.status(409).json({
@@ -52,8 +50,7 @@ export const errorHandler = (err, _req, res, _next) => {
     });
   }
 
-  /* A malformed ObjectId in the URL — a 400, not the 500 Mongoose's raw
-     CastError would otherwise become. */
+  /* A malformed ObjectId — a 400, not the 500 a raw CastError becomes. */
   if (err?.name === "CastError") {
     return res.status(400).json({ error: `Not a valid ${err.path}` });
   }
@@ -62,7 +59,7 @@ export const errorHandler = (err, _req, res, _next) => {
 
   return res.status(500).json({
     error: "Something went wrong",
-    /* The stack is useful locally and is an information leak in production. */
+    /* Useful locally, an information leak in production. */
     ...(isProduction ? {} : { detail: err?.message, stack: err?.stack }),
   });
 };

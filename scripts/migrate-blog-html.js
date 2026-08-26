@@ -1,16 +1,13 @@
-/* Fills in `html` for blog posts written before the rich-text editor existed,
-   by converting their `[kind, text]` blocks.
+/* Fills in `html` for posts written before the rich-text editor, from their
+   `[kind, text]` blocks.
 
      npm run migrate:blog-html -- --dry
      npm run migrate:blog-html
 
-   Safe to run more than once: it only touches posts whose `html` is still
-   empty, so a post an editor has since rewritten is never overwritten by its
-   own stale blocks. `--dry` prints what it would do and writes nothing.
-
-   ⚠ The original `body` blocks are left in place. They are no longer read, but
-   this is the only conversion that will ever happen and keeping the source
-   means it can be redone if the mapping turns out to be wrong. */
+   Safe to re-run: only posts whose `html` is still empty are touched, so a
+   rewritten post is never overwritten by its own stale blocks. ⚠ The original
+   `body` blocks are left in place so this can be redone if the mapping turns
+   out to be wrong. */
 
 import mongoose from "mongoose";
 import { CONFIG, assertConfig } from "../src/config.js";
@@ -43,8 +40,7 @@ async function main() {
     const html = blocksToHtml(post.body ?? []);
 
     if (!html) {
-      /* A post with neither HTML nor blocks. Not an error — it is simply an
-         empty post, and inventing a body for it would be worse. */
+      /* Neither HTML nor blocks. Not an error — just an empty post. */
       console.log(`  · ${post.slug}: nothing to convert`);
       empty += 1;
       continue;
@@ -54,8 +50,7 @@ async function main() {
     console.log(`  ✓ ${post.slug}: ${blocks} blocks → ${html.length} chars of HTML`);
 
     if (!dry) {
-      /* `updateOne` with `$set` so the model's sanitising setter runs and
-         `updatedAt` moves — this is a real edit to the document. */
+      /* `$set` so the sanitising setter runs and `updatedAt` moves. */
       await Blog.updateOne({ _id: post._id }, { $set: { html } });
     }
     converted += 1;

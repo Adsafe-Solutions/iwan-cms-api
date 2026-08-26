@@ -4,25 +4,19 @@ import { validate } from "../middleware/validate.js";
 import { assertCountryScope } from "../middleware/auth.js";
 import { isCountryCode } from "../lib/countries.js";
 
-/* Events, blogs, episodes and promos differ in their fields and in nothing
-   else: same identity (a unique slug), same country list, same draft/published
-   switch, same six operations. This builds that router once, so a fifth content
-   type is a model, a Zod schema, a serialiser and one line in routes/index.js.
-
-   Anything a type does NOT share goes in `beforeSave` rather than being smuggled
-   into the factory as another flag. */
+/* Events, blogs, episodes and promos differ in their fields and nothing else,
+   so this builds their router once: a fifth type is a model, a schema, a
+   serialiser and one line. Anything a type does NOT share goes in `beforeSave`
+   rather than becoming another flag on the factory. */
 
 const STATUSES = ["draft", "published"];
 
-/* The filter value meaning "not tied to any programme". A sentinel rather than
-   an empty string, because an empty query value cannot be told apart from an
-   absent one. The admin sends the same constant.
-   ⚠ It starts with "__" so it can never collide with a real nav path, which
-   always starts with "/". */
+/* "Not tied to any programme". A sentinel because an empty query value cannot
+   be told apart from an absent one. ⚠ Starts with "__" so it can never collide
+   with a real nav path, which always starts with "/". */
 export const NO_PROGRAMME = "__none";
 
-/* A user-typed search string goes into a RegExp, so every character that means
-   something to the engine has to stop meaning it — otherwise a lone "(" is a
+/* A typed search string goes into a RegExp — without escaping, a lone "(" is a
    500 and ".*" walks the whole collection. */
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -33,27 +27,22 @@ export function crudRouter({
   schema,
   serialize,
   sort = { updatedAt: -1 },
-  /* Fields a `?q=` search looks in. */
   searchFields = ["title", "slug"],
-  /* Runs on the finished document before it is saved, for a rule the shared
-     schema cannot express — see promos and their start/end window. */
+  /* For a rule the shared schema cannot express — see the promo window. */
   beforeSave,
 }) {
   const router = Router();
 
-  /* Which documents this account is allowed to SEE.
-
-     An unscoped account (any admin, or an editor with no countries) sees
-     everything. A scoped editor sees only documents naming one of their own
-     countries — which deliberately hides global documents from them too, since
-     `assertCountryScope` would refuse the edit anyway and a list full of rows
-     that cannot be opened is worse than a shorter list. */
+  /* An unscoped account sees everything; a scoped editor sees only documents
+     naming one of their countries. That hides global documents from them too,
+     deliberately: `assertCountryScope` would refuse the edit anyway, and a list
+     of rows that cannot be opened is worse than a shorter list. */
   const visibleTo = (user) =>
     user.role === "admin" || !user.countries?.length
       ? {}
       : { countries: { $in: user.countries } };
 
-  /* GET / — the admin listing. Drafts included; that is the whole point. */
+  /* The admin listing. Drafts included; that is the whole point. */
   router.get(
     "/",
     wrap(async (req, res) => {
@@ -64,22 +53,17 @@ export function crudRouter({
 
       const where = { ...visibleTo(req.user) };
 
-      /* ⚠ An exact match on the stored array, NOT the public `countryQuery`.
-         The admin asking for "ca" wants the rows tagged Canada; folding in
-         every global row as well would make the filter mean something else. */
+      /* ⚠ An exact match, NOT the public `countryQuery` — folding in every
+         global row would make the filter mean something else. */
       if (isCountryCode(country)) where.countries = country;
       if (STATUSES.includes(status)) where.status = status;
 
-      /* Only for the types that HAVE a programme — asked of the schema rather
-         than configured per resource, so a new content type with the field gets
-         the filter automatically and one without it cannot be handed a query
-         that silently matches nothing. */
+      /* Asked of the schema rather than configured per resource, so a type
+         without the field cannot be handed a query that matches nothing. */
       if (programme && model.schema.path("programme")) {
-        /* ⚠ "Open to all" is a real filter value, not the absence of one, and
-           it has to be a sentinel: an empty `?programme=` is indistinguishable
-           from no filter at all by the time it reaches here. The site stores
-           "not tied to a programme" as null, but a document written before the
-           field existed can have it missing entirely, so both are matched. */
+        /* ⚠ "Open to all" is a real value, not the absence of one — an empty
+           `?programme=` cannot be told apart from no filter here. Both null and
+           missing are matched, since older documents lack the field. */
         where.programme = programme === NO_PROGRAMME ? { $in: [null, ""] } : programme;
       }
 
@@ -123,25 +107,22 @@ export function crudRouter({
     })
   );
 
-  /* PUT replaces every field; PATCH merges. Both run the same guards, so the
-     difference is only how much of the document the caller has to restate. */
+  /* PUT replaces, PATCH merges. Same guards either way. */
   const write = (partial) =>
     wrap(async (req, res) => {
       const doc = await model.findById(req.params.id);
       if (!doc) throw notFound();
 
-      /* Both the document as it stands and as it would become have to be in
-         scope: without the first check a scoped editor could take over a
-         document belonging to another country by rewriting its `countries`. */
+      /* ⚠ Both the current and the resulting document must be in scope, or a
+         scoped editor could take one over by rewriting its `countries`. */
       assertCountryScope(req.user, doc.countries ?? []);
 
       const next = partial ? { ...doc.toObject(), ...req.body } : req.body;
       assertCountryScope(req.user, next.countries ?? []);
       if (beforeSave) beforeSave(next, req);
 
-      /* Assigning onto the loaded document (rather than findByIdAndUpdate) is
-         what makes Mongoose run the schema's own validators and the timestamp
-         update, and keeps `updatedAt` honest. */
+      /* Assigning onto the loaded document, not findByIdAndUpdate, is what
+         runs the schema validators and keeps `updatedAt` honest. */
       doc.set(partial ? req.body : { ...req.body });
       await doc.save();
 
@@ -159,7 +140,7 @@ export function crudRouter({
       assertCountryScope(req.user, doc.countries ?? []);
 
       await doc.deleteOne();
-      /* 204: there is no body worth sending, and the admin's list refetches. */
+      /* No body worth sending; the admin's list refetches. */
       res.status(204).end();
     })
   );

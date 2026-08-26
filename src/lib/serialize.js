@@ -1,44 +1,24 @@
 import { countryOf } from "./countries.js";
 
-/* Two shapes, one set of documents.
+/* Two shapes, one set of documents. PUBLIC serialisers reproduce the site's
+   existing content contract, which is why `id` holds the SLUG. ADMIN serialisers
+   are the storage shape, where `id` is the Mongo `_id`. Nothing in the admin
+   ever sees the public shape, so the two `id`s never meet. */
 
-   PUBLIC serialisers reproduce the public site's existing content contract
-   exactly — the same field names its static content/base/*.js files use, so
-   `resolveContent` can swap file for API without a single component changing.
-   That is why the identity field is `id` and holds the SLUG, not the Mongo id,
-   and why the agenda and blog body come back as pairs.
-
-   ADMIN serialisers are the storage shape: the Mongo `_id` (as `id`, since the
-   admin addresses documents by it), the `countries` array as stored, the draft
-   status, and the timestamps. Nothing in the admin ever sees the public shape,
-   so the two `id`s never meet. */
-
-/* Drops keys that carry no value, so the payload matches a hand-written content
-   file — where a field a thing does not have is simply absent — rather than
-   shipping a wall of nulls. Empty ARRAYS are kept: `agenda: []` says "no
-   running order", and a missing key would make a consumer guess. */
+/* Drops valueless keys, so the payload matches a hand-written content file
+   rather than shipping a wall of nulls. Empty ARRAYS are kept: `agenda: []`
+   says "no running order", where a missing key would make a consumer guess. */
 const compact = (obj) =>
   Object.fromEntries(
     Object.entries(obj).filter(([, v]) => v !== null && v !== undefined && v !== "")
   );
 
-/* ── public ─────────────────────────────────────────────────────────────── */
-
-/* ── card vs detail ─────────────────────────────────────────────────────── */
-
-/* ⚠ The most load-bearing distinction in this file.
-
-   A CARD is what a listing renders: enough to draw the tile and link to it.
-   A DETAIL is the whole record.
-
-   Serving detail fields in a list is what made the old single payload 64 KB for
-   thirteen posts — a post's `html` alone was 81% of it, and an event carries
-   `details` plus a whole `agenda` that only its own page reads. The cost of
-   getting this wrong lands on the homepage, and it grows with every row an
-   editor adds. Lists use the card serialisers; only `/…/:slug` uses these.
-
-   The card is a strict SUBSET of the detail shape, so a component written
-   against a card keeps working if it is later handed a detail. */
+/* ⚠ CARD vs DETAIL is the load-bearing distinction here. A card is what a
+   listing renders; a detail is the whole record. Serving detail fields in a
+   list is what made the old payload 64 KB for thirteen posts, and the cost
+   lands on the homepage. Lists use the card serialisers; only `/…/:slug` uses
+   these. A card is a strict SUBSET of a detail, so a component written against
+   one keeps working if handed the other. */
 
 export const publicEventCard = (doc) =>
   compact({
@@ -54,10 +34,8 @@ export const publicEventCard = (doc) =>
     spots: doc.spots,
     img: doc.img,
     summary: doc.summary,
-    /* ⚠ Deliberately NOT the form — a listing draws a card, it does not draw a
-       registration form. Same rule as `details` and `agenda`. What it DOES say
-       is whether there is one, so a card can show a Register button without
-       fetching the whole event to find out. */
+    /* ⚠ Not the form itself — only whether there IS one, so a card can show a
+       Register button without fetching the whole event. */
     ...(doc.form?.length ? { hasForm: true } : {}),
   });
 
@@ -115,15 +93,10 @@ export const publicBlog = (doc) =>
     img: doc.img,
     excerpt: doc.excerpt,
 
-    /* The post. Already sanitised on write, so the site renders it directly
-       with dangerouslySetInnerHTML — see the note in lib/html.js.
-
-       ⚠ The old `[kind, text]` pairs are GONE from this payload. They were a
-       compatibility shim for the window between the CMS storing HTML and the
-       site being taught to render it; the site now reads `html`, and carrying
-       both was 45% of the /api/content response for no reader. The `body`
-       blocks are still on the DOCUMENT — that is the preserved pre-conversion
-       source — they are simply no longer served. */
+    /* Already sanitised on write, so the site renders it directly with
+       dangerouslySetInnerHTML — see lib/html.js. ⚠ The old `[kind, text]` pairs
+       are gone from this payload (45% of /api/content, for no reader). `body` is
+       still on the DOCUMENT as the preserved source, just not served. */
     html: doc.html ?? "",
   });
 
@@ -151,8 +124,7 @@ export const publicShow = (show, episodes = []) => ({
 export const publicPromo = (doc) =>
   doc
     ? compact({
-        /* PromoPopup remembers a dismissal under this, so it is the slug —
-           a new campaign gets a new slug and shows again to everyone. */
+        /* PromoPopup keys its dismissal on this, so a new slug re-shows. */
         id: doc.slug,
         eyebrow: doc.eyebrow,
         heading: doc.heading,
@@ -162,8 +134,6 @@ export const publicPromo = (doc) =>
         dismiss: doc.dismiss,
       })
     : null;
-
-/* ── admin ──────────────────────────────────────────────────────────────── */
 
 const adminBase = (doc) => ({
   id: String(doc._id),
@@ -247,12 +217,9 @@ export const adminPromo = (doc) => ({
   priority: doc.priority ?? 0,
 });
 
-/* A registration, as the CMS reads it.
-
-   ⚠ `answers` keeps the label and type each answer was GIVEN under, not the
-   question's current wording — see models/Registration.js. Rendering from the
-   event's current form instead would silently rewrite history every time an
-   editor edits the form. */
+/* ⚠ `answers` keeps the label and type each answer was GIVEN under, not the
+   question's current wording — see models/Registration.js. Reading from the
+   event's current form would silently rewrite history on every form edit. */
 export const adminRegistration = (doc) => ({
   id: String(doc._id),
   event: String(doc.event),
@@ -263,9 +230,8 @@ export const adminRegistration = (doc) => ({
   name: doc.name ?? "",
   email: doc.email ?? "",
   note: doc.note ?? "",
-  /* Null means no confirmation is on record — either none was sent or the
-     registration predates the field. The CMS says "unknown" rather than
-     "never", because it cannot tell those apart. */
+  /* Null means no record — sent-and-unstamped and never-sent are
+     indistinguishable, so the CMS says "unknown" rather than "never". */
   confirmationSentAt: doc.confirmationSentAt ?? null,
   confirmationSentCount: doc.confirmationSentCount ?? 0,
   answers: (doc.answers ?? []).map((a) => ({

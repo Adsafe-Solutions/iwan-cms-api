@@ -29,22 +29,18 @@ import { validate } from "../middleware/validate.js";
 import { badRequest, notFound, wrap } from "../lib/errors.js";
 import { COUNTRY_CODES } from "../lib/countries.js";
 
-/* Everything behind a sign-in. Mounted at /api/admin, and `requireAuth` is
-   applied to the whole router rather than route by route, so a new route added
-   below cannot be left unprotected by forgetting a middleware. */
+/* Everything behind a sign-in. `requireAuth` is applied to the whole router
+   rather than route by route, so a new route cannot be left unprotected. */
 
 const router = Router();
 
 router.use(requireAuth);
 
-/* What the admin UI needs to render its forms without hard-coding any of it:
-   the country codes this API accepts, and the programme paths an event or post
-   can be filed under.
+/* What the admin needs to render its forms without hard-coding any of it.
 
-   ⚠ The programme list is a copy of the public site's content/base/nav.js. It
-   lives here so the admin's dropdown and the API's validation agree, and it has
-   to be updated alongside the site when a programme is added or renamed —
-   a path that does not match a nav entry renders as an unfiled item rather than
+   ⚠ The programme list is a copy of the site's content/base/nav.js, kept here
+   so the admin's dropdown and the API's validation agree. It has to be updated
+   alongside the site: an unmatched path renders as unfiled rather than
    failing loudly. */
 const PROGRAMMES = [
   { path: "/iwan-men", label: "Iwan Men" },
@@ -61,20 +57,17 @@ router.get("/meta", (_req, res) => {
   });
 });
 
-/* ── content ────────────────────────────────────────────────────────────── */
-
 router.use(
   "/events",
   crudRouter({
     model: Event,
     schema: eventInput,
     serialize: adminEvent,
-    /* Soonest first: the events an editor is most likely to be touching are the
-       ones that have not happened yet. */
+    /* Soonest first — the ones an editor is most likely to be touching. */
     sort: { date: 1 },
     searchFields: ["title", "slug", "venue"],
-    /* Runs on the MERGED event, so a PATCH that only flips `status` to
-       published is still checked against the form already stored. */
+    /* Runs on the MERGED event, so a PATCH flipping only `status` is still
+       checked against the form already stored. */
     beforeSave: assertEventIsSound,
   })
 );
@@ -109,16 +102,14 @@ router.use(
     serialize: adminPromo,
     sort: { priority: -1, updatedAt: -1 },
     searchFields: ["name", "slug", "heading"],
-    /* The one rule the shared schema cannot express — and it is checked on the
-       MERGED document, so a PATCH that moves only one end of the window is
-       caught too. */
+    /* The one rule the shared schema cannot express, checked on the MERGED
+       document so a PATCH moving one end of the window is caught. */
     beforeSave: assertPromoWindow,
   })
 );
 
-/* The show is a singleton, so it gets GET/PUT rather than a CRUD router — there
-   is nothing to list and nothing to create. `upsert` means the first save
-   creates it, which is why there is no separate "set up the podcast" step. */
+/* A singleton, so GET/PUT rather than a CRUD router. `upsert` means the first
+   save creates it, hence no separate "set up the podcast" step. */
 router
   .route("/podcast/show")
   .get(
@@ -142,10 +133,8 @@ router
 
 router.use("/registrations", registrationRoutes);
 
-/* ── accounts ───────────────────────────────────────────────────────────── */
-
-/* Admins only: an editor who could create accounts could create an unscoped one
-   and step straight around their own country scope. */
+/* Admins only: an editor who could create accounts could create an unscoped
+   one and step around their own country scope. */
 router.use("/users", requireAdmin);
 
 router.get(
@@ -178,9 +167,8 @@ router.patch(
 
     const { password, ...rest } = req.body;
 
-    /* ⚠ Locking yourself out is one API call away otherwise: deactivating your
-       own account, or demoting the last admin, leaves nobody who can undo it.
-       Both are refused here rather than left as a support problem. */
+    /* ⚠ Deactivating yourself or demoting the last admin leaves nobody who can
+       undo it. Refused here rather than left as a support problem. */
     if (String(user._id) === String(req.user._id)) {
       if (rest.active === false) throw badRequest("You cannot deactivate yourself");
       if (rest.role && rest.role !== "admin") {

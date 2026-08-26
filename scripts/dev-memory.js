@@ -1,34 +1,19 @@
-/* Boots the API against a throwaway in-memory MongoDB, seeds it from the public
-   site's content and creates a dev admin — so the whole stack runs with no
-   Atlas cluster, no connection string and no account setup.
+/* Boots the API against a throwaway in-memory MongoDB, seeded and with a dev
+   admin, so the stack runs with no Atlas cluster and no account setup.
 
      npm run dev:memory
 
-   ⚠ Everything is gone when the process stops. This is for local work and demos
-   only; anything you want to keep needs a real MONGODB_URI and `npm run dev`.
-
-   The credentials are printed on boot and are deliberately fixed, so the login
-   screen can be filled in without hunting for them. `config.js` refuses to run
-   in production without a real secret, which is what stops this being reachable
-   from a deployed build. */
+   ⚠ Everything is gone when the process stops. Anything you want to keep needs
+   a real MONGODB_URI and `npm run dev`. */
 
 import "dotenv/config";
 import { randomBytes } from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";
 
-/* ⚠ NO CREDENTIAL IS WRITTEN IN THIS FILE.
-
-   It is committed, so anything hard-coded here is published — and worse, the
-   account it opens is a real one, because the same login is used against
-   whatever database `npm run dev` points at.
-
-   So: taken from the environment when set (your gitignored .env), and otherwise
-   GENERATED FRESH each boot and printed in the banner below. A generated one
-   changes every restart, which is mildly annoying and exactly the nudge to put
-   your own in .env.
-
-   The email and username are not secrets, but they are defaulted to something
-   obviously local rather than to a real account. */
+/* ⚠ NO CREDENTIAL IS WRITTEN IN THIS FILE. It is committed, and the account it
+   opens is a real one — the same login works against whatever database
+   `npm run dev` points at. Taken from your gitignored .env when set, otherwise
+   generated fresh each boot and printed in the banner below. */
 const EMAIL = process.env.ADMIN_EMAIL || "dev@localhost";
 const USERNAME = process.env.ADMIN_USERNAME || "dev";
 const PASSWORD = process.env.ADMIN_PASSWORD || randomBytes(9).toString("base64url");
@@ -39,8 +24,7 @@ const mongod = await MongoMemoryServer.create();
 process.env.NODE_ENV = "development";
 process.env.MONGODB_URI = mongod.getUri("iwan_cms_dev_memory");
 process.env.JWT_SECRET ??= "local-development-only-not-a-real-secret";
-/* Empty in development means "any origin" — see app.js. The admin runs on 5174
-   and the public site on 5173, and a demo may run on neither. */
+/* Empty in development means "any origin" — see app.js. */
 process.env.CORS_ORIGINS ??= "";
 
 const { connectDb } = await import("../src/db.js");
@@ -58,8 +42,7 @@ await User.create({
   role: "admin",
 });
 
-/* Seeded in-process rather than by shelling out, so the data is there before
-   the port opens and the first page load is never of an empty CMS. */
+/* Seeded in-process, so the data is there before the port opens. */
 const { seedInto } = await import("./seed-lib.js");
 const counts = await seedInto();
 

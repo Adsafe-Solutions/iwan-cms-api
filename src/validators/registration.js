@@ -1,26 +1,22 @@
 import { badRequest } from "../lib/errors.js";
 
-/* Turns whatever the browser posted into answers that can be stored, checked
-   question by question against the event's CURRENT form.
+/* Turns what the browser posted into storable answers, checked against the
+   event's CURRENT form.
 
-   ⚠ This is the security boundary for the one endpoint the public can write
-   to. Nothing here trusts the submitted shape: the FORM decides which keys
-   exist, what type each is, and which options are allowed. A key that is not in
-   the form is dropped rather than stored, so a crafted request cannot invent
-   fields, and a choice answer that is not one of the offered options is
-   refused rather than saved as free text. */
+   ⚠ The security boundary for the one endpoint the public can write to. The
+   FORM decides which keys exist, their types and their allowed options: an
+   unknown key is dropped rather than stored, and an off-list choice is refused
+   rather than saved as free text. */
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/* Long enough for a real answer to an open question, short enough that a bot
-   cannot fill the collection one submission at a time. */
+/* Long enough for a real answer, short enough to bound a bot's submission. */
 const MAX_TEXT = 2000;
 const MAX_SHORT = 300;
 
 const str = (v) => (typeof v === "string" ? v.trim() : "");
 
-/* Whether an answer counts as given. ⚠ `false` and `0` are real answers, so a
-   plain falsy check would treat "no" and "zero" as blank. */
+/* ⚠ `false` and `0` are real answers — a falsy check would call them blank. */
 const isBlank = (value) => {
   if (value === null || value === undefined) return true;
   if (typeof value === "string") return value.trim() === "";
@@ -58,8 +54,7 @@ function coerce(field, raw, fail) {
     case "date": {
       const value = str(raw);
       if (!value) return null;
-      /* Same "YYYY-MM-DD string, never a Date" rule the rest of this API
-         follows — see models/common.js. */
+      /* "YYYY-MM-DD string, never a Date" — see models/common.js. */
       if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) fail("Use YYYY-MM-DD");
       return value;
     }
@@ -73,9 +68,8 @@ function coerce(field, raw, fail) {
     case "select": {
       const value = str(raw);
       if (!value) return null;
-      /* ⚠ Must be one of the options offered. Otherwise the endpoint accepts
-         arbitrary text under a question that looks like a controlled choice,
-         and whoever reads the answers later has no idea. */
+      /* ⚠ Must be one of the offered options, or the endpoint accepts free
+         text under a question that reads as a controlled choice. */
       if (!options.includes(value)) fail(`"${value}" is not one of the choices`);
       return value;
     }
@@ -92,17 +86,14 @@ function coerce(field, raw, fail) {
       return str(raw).slice(0, MAX_TEXT) || null;
 
     default:
-      /* text, phone, and anything else that is a line of text. */
+      /* text, phone, and anything else that is one line. */
       return str(raw).slice(0, MAX_SHORT) || null;
   }
 }
 
-/* `form` is the event's questions; `submitted` is the raw `{ key: value }` the
-   browser posted. Returns the answers ready to store.
-
-   Every problem is collected and thrown as one 400, so a person filling in a
-   form is told everything that is wrong at once rather than one field at a
-   time. */
+/* `form` is the questions, `submitted` the raw `{ key: value }` posted. Every
+   problem is collected into one 400, so the person is told everything that is
+   wrong at once rather than one field at a time. */
 export function buildAnswers(form = [], submitted = {}) {
   const problems = [];
   const answers = [];
@@ -118,9 +109,8 @@ export function buildAnswers(form = [], submitted = {}) {
       fail("That answer could not be read");
     }
 
-    /* ⚠ A consent question is required whatever its `required` flag says — an
-       agreement nobody has to give is not an agreement, which is the same rule
-       the builder enforces by hiding the toggle. */
+    /* ⚠ Consent is required whatever its `required` flag says — an agreement
+       nobody has to give is not an agreement. */
     const mustHave = field.required || field.type === "consent";
 
     if (mustHave) {
@@ -133,8 +123,7 @@ export function buildAnswers(form = [], submitted = {}) {
 
     answers.push({
       key: field.key,
-      /* ⚠ Snapshotted, so the answer stays readable after the question is
-         renamed or deleted — see models/Registration.js. */
+      /* ⚠ Snapshotted — see models/Registration.js. */
       label: field.label,
       type: field.type,
       value,
@@ -148,9 +137,8 @@ export function buildAnswers(form = [], submitted = {}) {
   return answers;
 }
 
-/* The name and email lifted out for the list view. Best-effort: a form that
-   asks for neither simply leaves them blank rather than every event being
-   forced to ask. */
+/* Lifted out for the list view. Best-effort: a form asking for neither leaves
+   them blank rather than forcing every event to ask. */
 export function summarise(answers = []) {
   const nameField = answers.find((a) => a.type === "name" && a.value);
   const name = nameField

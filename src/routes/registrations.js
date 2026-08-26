@@ -10,8 +10,8 @@ import { isCountryCode } from "../lib/countries.js";
 import { adminRegistration } from "../lib/serialize.js";
 import { toCsv } from "../lib/csv.js";
 
-/* Reading and managing sign-ups. Mounted under /api/admin, so everything here
-   is already behind a sign-in. */
+/* Reading and managing sign-ups. Mounted under /api/admin, so already behind a
+   sign-in. */
 
 const router = Router();
 
@@ -30,16 +30,13 @@ const where = (req) => {
 
   if (typeof q === "string" && q.trim()) {
     const rx = new RegExp(escapeRegex(q.trim()), "i");
-    /* Name and email only. Searching inside every answer would mean a regex
-       scan of the whole `answers` array on every keystroke, and the two fields
-       people actually search by are lifted out for exactly this. */
+    /* Name and email only — searching inside `answers` would be a regex scan
+       of the whole array on every keystroke. */
     filter.$or = [{ name: rx }, { email: rx }];
   }
 
   return filter;
 };
-
-/* ── the list ───────────────────────────────────────────────────────────── */
 
 router.get(
   "/",
@@ -61,10 +58,8 @@ router.get(
   })
 );
 
-/* Which events have sign-ups, and how many — what the filter dropdown needs,
-   and a useful answer on its own. Counted from the registrations rather than
-   listing every event, so an event nobody has signed up for does not clutter
-   the filter. */
+/* Which events have sign-ups, and how many. Counted from the registrations, so
+   an event nobody signed up for does not clutter the filter. */
 router.get(
   "/events",
   wrap(async (_req, res) => {
@@ -75,8 +70,7 @@ router.get(
           title: { $last: "$eventTitle" },
           total: { $sum: 1 },
           latest: { $max: "$createdAt" },
-          /* ⚠ Cancellations do not count towards a place being taken, which is
-             the same rule the public endpoint applies at submit time. */
+          /* ⚠ Cancellations do not take a place — same rule as submit time. */
           taken: {
             $sum: {
               $cond: [{ $in: ["$status", ["new", "confirmed"]] }, 1, 0],
@@ -87,7 +81,7 @@ router.get(
       { $sort: { latest: -1 } },
     ]);
 
-    /* The event's stated capacity, so the admin can show "12 of 40". */
+    /* Stated capacity, so the admin can show "12 of 40". */
     const events = await Event.find({ slug: { $in: rows.map((r) => r._id) } })
       .select("slug spots date")
       .lean();
@@ -107,17 +101,15 @@ router.get(
   })
 );
 
-/* ⚠ Registered BEFORE `/:id`, or Express matches "export" as an id and every
-   download becomes a 400 for a malformed ObjectId. */
+/* ⚠ BEFORE `/:id`, or Express matches "export" as an id and every download
+   becomes a 400 for a malformed ObjectId. */
 router.get(
   "/export",
   wrap(async (req, res) => {
     const rows = await Registration.find(where(req)).sort({ createdAt: 1 }).lean();
 
-    /* One column per question, which means the columns come from the answers
-       themselves — a spreadsheet of a single event is then exactly that event's
-       form. Across events the union is used, and a row simply has blanks where
-       its form did not ask. */
+    /* Columns come from the answers, so one event's spreadsheet is exactly
+       that event's form. Across events the union is used, with blanks. */
     const csv = toCsv(rows.map(adminRegistration));
 
     const name = req.query.event ? `registrations-${req.query.event}` : "registrations";
@@ -154,14 +146,10 @@ router.patch(
   })
 );
 
-/* ── resending the confirmation ─────────────────────────────────────────── */
-
-/* ⚠ A limit on an endpoint that is ALREADY behind a sign-in, which looks
-   redundant and is not. Every other route here moves rows in a database; this
-   one puts mail in a member of the public's inbox, and that is the one action
-   in this API a mistake cannot be walked back. The number is set so a busy
-   organiser working through an event never meets it, while a stuck key repeat
-   or a script running loose cannot turn the CMS into an inbox-bombing tool. */
+/* ⚠ A limit on an already-authenticated endpoint, which looks redundant and is
+   not: every other route here moves database rows, this one puts mail in a
+   member of the public's inbox and cannot be walked back. High enough that a
+   busy organiser never meets it, low enough to stop an inbox-bombing loop. */
 const resendLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   limit: 30,
@@ -172,15 +160,12 @@ const resendLimiter = rateLimit({
   },
 });
 
-/* Sends the confirmation for an existing registration again — someone deleted
-   it, it went to spam, or it never sent because mail was not configured yet.
-   Nothing about the registration changes except the record of the send.
+/* Sends the confirmation again — it was deleted, went to spam, or never sent.
+   Nothing changes on the registration except the record of the send.
 
-   ⚠ AWAITED, unlike the public sign-up route which fires and forgets. There the
-   caller is a member of the public whose place is already booked and who must
-   not be made to wait on Resend; here the caller is an editor who pressed
-   "Resend" and whose entire question is whether it worked. Reporting success
-   before knowing would make the button a placebo. */
+   ⚠ AWAITED, unlike the public sign-up route which fires and forgets: the
+   caller here is an editor whose entire question is whether it worked, and
+   reporting success before knowing would make the button a placebo. */
 router.post(
   "/:id/resend",
   resendLimiter,
@@ -188,8 +173,7 @@ router.post(
     const registration = await Registration.findById(req.params.id);
     if (!registration) throw notFound("No such registration");
 
-    /* Each of these is refused BEFORE calling Resend, so the editor gets the
-       actual reason rather than a generic failure from the mail API. */
+    /* Refused BEFORE calling Resend, so the editor gets the real reason. */
     if (!MAIL_ENABLED) {
       throw badRequest(
         "Email is not configured on this server, so nothing can be sent. Set RESEND_API_KEY and MAIL_FROM."
@@ -202,20 +186,18 @@ router.post(
       );
     }
 
-    /* ⚠ Refused for a CANCELLED registration. The message this sends says "Your
-       place is confirmed", and sending that to someone who withdrew is worse
-       than sending nothing: they may turn up. Reinstating them first is one
-       click, and makes the intent explicit rather than implied by a resend. */
+    /* ⚠ Refused when CANCELLED: this message says "your place is confirmed",
+       and sending that to someone who withdrew may bring them to the door.
+       Reinstating first is one click and makes the intent explicit. */
     if (registration.status === "cancelled") {
       throw badRequest(
         "This registration is cancelled, and the confirmation says a place is booked. Change the status first if they are coming after all."
       );
     }
 
-    /* The event as it stands NOW, so a resend carries a corrected date or venue
-       rather than repeating what the original said. ⚠ May be null — the event
-       can have been deleted since. The message falls back to the title
-       snapshotted on the registration and simply omits the date. */
+    /* The event as it stands NOW, so a resend carries a corrected date or
+       venue. ⚠ May be null if the event was deleted; the message then falls
+       back to the snapshotted title and omits the date. */
     const event = await Event.findById(registration.event).lean();
 
     const result = await sendRegistrationConfirmation({ registration, event });
@@ -225,9 +207,8 @@ router.post(
       );
     }
 
-    /* ⚠ Only now. See models/Registration.js — the stamp means "this reached
-       the mail provider", so writing it before the send would make it a record
-       of attempts wearing the clothes of a record of deliveries. */
+    /* ⚠ Only now — the stamp means "reached the mail provider", so writing it
+       earlier would make it a record of attempts dressed as one of sends. */
     registration.confirmationSentAt = new Date();
     registration.confirmationSentCount += 1;
     await registration.save();

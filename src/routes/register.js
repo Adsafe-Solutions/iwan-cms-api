@@ -7,28 +7,17 @@ import { COUNTRY_CODES, countryQuery, isCountryCode } from "../lib/countries.js"
 import { buildAnswers, summarise } from "../validators/registration.js";
 import { sendRegistrationConfirmation } from "../lib/mail.js";
 
-/* The one route on this API that the public can WRITE to.
-
-   Everything else the world can reach is a GET. That makes this the whole
-   attack surface for spam, junk data and someone filling the database one
-   request at a time — hence the rate limit below, the capacity check, and the
-   fact that validators/registration.js trusts nothing about the posted shape. */
+/* The one route the public can WRITE to, and therefore the whole attack surface
+   for spam and junk data — hence the rate limits below, the capacity check, and
+   validators/registration.js trusting nothing about the posted shape. */
 
 const router = Router();
 
-/* TWO limits, because there are two different things to protect against and one
-   number cannot do both.
-
-   ⚠ `skipFailedRequests` on the tight one is the important part. Counting
-   rejected submissions would mean someone who mistypes their email three times
-   is locked out for ten minutes — punished for filling in the form badly, which
-   is not the behaviour anyone wants. What actually needs limiting is
-   SUCCESSFUL writes, since those are what fill the database.
-
-   Probing is then covered by the second, looser limit, which counts everything.
-
-   ⚠ Both need `trust proxy` set on the app, or every request appears to come
-   from the host's proxy and each becomes one global bucket — see app.js. */
+/* TWO limits: one number cannot protect against both filling the database and
+   probing. ⚠ `skipFailedRequests` is the important part — counting rejected
+   submissions would lock out someone who mistyped their email three times. Only
+   SUCCESSFUL writes need limiting; the looser limit below covers probing.
+   ⚠ Both need `trust proxy` on the app or every request shares one bucket. */
 const submissionLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   limit: 5,
@@ -40,8 +29,7 @@ const submissionLimiter = rateLimit({
   },
 });
 
-/* The backstop: enough headroom for a person correcting a long form several
-   times over, low enough that nobody is hammering this endpoint. */
+/* The backstop: headroom for someone correcting a long form repeatedly. */
 const attemptLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   limit: 40,
@@ -62,9 +50,8 @@ router.post(
   wrap(async (req, res) => {
     const country = askedCountry(req);
 
-    /* ⚠ Only a PUBLISHED event in this country can be registered for. A draft
-       is not public, and an event belonging to another country is not on offer
-       here — in both cases the honest answer is that there is no such event. */
+    /* ⚠ Only a PUBLISHED event in this country. For a draft or another
+       country's event, the honest answer is that there is no such event. */
     const event = await Event.findOne({
       slug: req.params.slug,
       status: "published",
@@ -74,9 +61,8 @@ router.post(
     if (!event) throw notFound("No such event");
 
     if (!event.form?.length) {
-      /* Should be impossible — publishing without a form is refused — but an
-         event published before that rule existed would land here, and a 500
-         would be a worse answer than saying so. */
+      /* Should be impossible, but an event published before that rule existed
+         would land here, and a 500 would be a worse answer. */
       throw badRequest("This event is not taking registrations");
     }
 
@@ -85,11 +71,10 @@ router.post(
     const answers = buildAnswers(event.form, req.body?.answers ?? req.body ?? {});
     const { name, email } = summarise(answers);
 
-    /* Capacity, where the event states one. Counted at submit time rather than
-       held as a running total on the event: two people submitting at the same
-       instant could both pass this check, which would put the event one over
-       rather than silently losing a sign-up. Over by one is a problem an
-       organiser can solve; a dropped registration is not. */
+    /* Counted at submit time rather than kept as a running total: two
+       simultaneous submissions can both pass, putting the event one over rather
+       than silently losing a sign-up. Over by one is a problem an organiser can
+       solve; a dropped registration is not. */
     if (Number.isFinite(event.spots) && event.spots > 0) {
       const taken = await Registration.countDocuments({
         event: event._id,
@@ -105,8 +90,7 @@ router.post(
     const registration = await Registration.create({
       event: event._id,
       eventSlug: event.slug,
-      /* Snapshotted like the answers — a registration should still read
-         properly if the event is renamed or removed. */
+      /* Snapshotted, so this still reads properly if the event is renamed. */
       eventTitle: event.title,
       country,
       answers,
@@ -114,31 +98,23 @@ router.post(
       email,
     });
 
-    /* ⚠ Deliberately thin. The person filling in the form does not need their
-       own answers echoed back, and this response is public — the less it says
-       about what is stored, the better. */
+    /* ⚠ Deliberately thin — this response is public, so the less it says about
+       what is stored, the better. */
     res.status(201).json({
       ok: true,
       id: String(registration._id),
       event: { slug: event.slug, title: event.title },
     });
 
-    /* ⚠ AFTER the response, and deliberately not awaited. The place is already
-       booked; making the caller wait on an external mail API would add its
-       latency to every sign-up, and making the 201 depend on it would turn a
-       mail outage into an error the person retries — putting a second copy of
-       them in the database. sendRegistrationConfirmation never throws, so this
-       cannot reject into `wrap` and try to respond twice.
+    /* ⚠ AFTER the response and not awaited. Making the 201 depend on a mail
+       API would turn an outage into an error the person retries, putting a
+       second copy of them in the database. sendRegistrationConfirmation never
+       throws, so this cannot reject into `wrap` and respond twice.
 
-       The stamp that follows is what lets the CMS tell an organiser whether
-       this person was ever written to — without it, everyone who signed up
-       normally would show as never contacted and the Resend button would be
-       pressed on people who already had their email. ⚠ `updateOne` rather than
-       saving the document: this runs after the response, and re-saving a doc
-       an admin may have edited in between would write back the stale copy
-       captured in this closure. The `.catch` is not optional either — an
-       unhandled rejection here would be a failed stamp taking the process down
-       with it, long after the sign-up itself succeeded. */
+       The stamp is what lets the CMS say whether this person was ever written
+       to. ⚠ `updateOne` rather than saving the document — re-saving the copy
+       captured in this closure would write back a stale doc — and the `.catch`
+       stops a failed stamp becoming an unhandled rejection. */
     void sendRegistrationConfirmation({ registration, event })
       .then((result) => {
         if (!result.sent) return null;

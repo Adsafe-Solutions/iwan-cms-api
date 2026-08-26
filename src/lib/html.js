@@ -1,25 +1,16 @@
 import sanitizeHtml from "sanitize-html";
 
-/* Blog posts are written as rich text and stored as HTML, which the public site
-   renders with `dangerouslySetInnerHTML`.
+/* Posts are stored as HTML and rendered with `dangerouslySetInnerHTML`.
 
-   ⚠ That makes sanitising a SECURITY control, not a tidiness one, and it
-   happens HERE — on write, before anything is stored — rather than on render.
-   Two reasons: the stored value is then trustworthy for every consumer (the
-   site, a future feed, an email), and there is exactly one place to get it
-   right. Sanitising only at render means every new consumer has to remember.
+   ⚠ Sanitising is therefore a SECURITY control, and it happens HERE — on write,
+   before storage — so the stored value is trustworthy for every consumer and
+   there is one place to get it right. It runs on every write path including
+   PATCH and the seed: "an editor would not paste a script tag" is not a
+   security model when Word paste and compromised accounts look the same. */
 
-   It runs on every write path, including PATCH and the seed, because "an editor
-   would not paste a script tag" is not a security model — a pasted Word
-   document, a copied CMS block from another site, or a compromised editor
-   account all arrive the same way. */
-
-/* An allowlist, not a blocklist: anything not named here is dropped.
-
-   ⚠ No `h1` — the page supplies the post's own title as the h1, and a second
-   one breaks the document outline. The editor offers h2/h3/h4 for that reason.
-   No `span`, `div` or `style` either: they carry no meaning the site renders
-   and are the usual vehicle for pasted junk from Word and Google Docs. */
+/* An allowlist: anything not named here is dropped. ⚠ No `h1` — the page
+   supplies the post's title as the h1 and a second breaks the outline. No
+   `span`, `div` or `style` either: the usual vehicle for pasted Word junk. */
 const ALLOWED_TAGS = [
   "p",
   "br",
@@ -49,27 +40,23 @@ const SANITIZE_OPTIONS = {
     a: ["href", "title", "target", "rel"],
     img: ["src", "alt", "title", "width", "height", "loading"],
   },
-  /* http/https/mailto/tel only. This is what blocks `javascript:` URLs, which
-     are script execution dressed up as a link and the single most likely way
-     a script gets through an otherwise sensible allowlist. */
+  /* ⚠ What blocks `javascript:` URLs — script execution dressed as a link, and
+     the likeliest way through an otherwise sensible allowlist. */
   allowedSchemes: ["http", "https", "mailto", "tel"],
   allowedSchemesAppliedToAttributes: ["href", "src"],
-  /* A protocol-relative `//evil.com` URL is not obviously a scheme and would
-     otherwise pass. */
+  /* A protocol-relative `//evil.com` is not obviously a scheme. */
   allowProtocolRelative: false,
-  /* Discard the CONTENT of anything script-like, not just its tags — dropping
-     `<script>` while keeping the code inside it would leave the payload sitting
-     in the page as text, and one careless renderer away from executing. */
+  /* ⚠ Discard the CONTENT, not just the tags — dropping `<script>` while
+     keeping the code inside leaves the payload in the page as text. */
   nonTextTags: ["style", "script", "textarea", "option", "noscript"],
   transformTags: {
-    /* Every link opens away from the site and cannot reach back through
-       `window.opener`. Applied here rather than trusted from the editor, so a
-       link pasted as raw HTML gets it too. */
+    /* Applied here rather than trusted from the editor, so a link pasted as
+       raw HTML cannot reach back through `window.opener`. */
     a: sanitizeHtml.simpleTransform("a", {
       target: "_blank",
       rel: "noopener noreferrer",
     }),
-    /* Images in a post are always below the fold of the post's own hero. */
+    /* Always below the fold of the post's own hero. */
     img: sanitizeHtml.simpleTransform("img", { loading: "lazy" }),
   },
 };
@@ -79,10 +66,8 @@ export const sanitize = (html = "") => {
   return sanitizeHtml(html, SANITIZE_OPTIONS).trim();
 };
 
-/* An empty rich-text editor does not produce an empty string — it produces the
-   markup for one empty paragraph. Treating that as content would give every
-   half-written post a body that is technically non-empty, so a post with
-   nothing in it reports as having nothing in it. */
+/* An empty editor produces the markup for one empty paragraph, not "". Without
+   this, every half-written post has a technically non-empty body. */
 const EMPTY = /^(<p>(\s|&nbsp;|<br\s*\/?>)*<\/p>\s*)+$/i;
 
 export const isEmptyHtml = (html = "") => !html.trim() || EMPTY.test(html.trim());
@@ -94,18 +79,10 @@ const escape = (text = "") =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 
-/* ── the one remaining bridge ──────────────────────────────────────────── */
-
-/* Blocks → HTML. Used once per post by the migration and by the seed, to turn
-   the site's existing `[kind, text]` pairs into the HTML the editor now owns.
-
-   ⚠ The reverse (`htmlToBlocks`) is gone. It was a shim so the public payload
-   could keep serving the old pair format while the site still rendered it; the
-   site reads `html` now, and carrying both was 45% of the /api/content
-   response for no reader at all.
-   Consecutive `li` blocks become one list rather than a run of single-item
-   lists, which is what they were always meant to be — the pair format simply
-   had no way to say so. */
+/* Blocks → HTML, used once per post by the migration and the seed. ⚠ The
+   reverse (`htmlToBlocks`) is gone — it was a shim, and carrying both formats
+   was 45% of /api/content for no reader. Consecutive `li` blocks become one
+   list, which the pair format had no way to express. */
 export function blocksToHtml(blocks = []) {
   const out = [];
   let list = null;
@@ -129,7 +106,7 @@ export function blocksToHtml(blocks = []) {
     }
 
     closeList();
-    /* ⚠ "h" becomes h2, never h1 — see the note on ALLOWED_TAGS. */
+    /* ⚠ "h" becomes h2, never h1 — see ALLOWED_TAGS. */
     out.push(kind === "h" ? `<h2>${escape(text)}</h2>` : `<p>${escape(text)}</p>`);
   }
 

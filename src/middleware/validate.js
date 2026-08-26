@@ -1,12 +1,8 @@
 import { badRequest } from "../lib/errors.js";
 
-/* Parses `req.body` through a Zod schema and REPLACES it with the parsed
-   result, so a route only ever sees values that have already been checked,
-   trimmed and defaulted. A failure throws a ZodError, which middleware/error.js
-   turns into a 400 listing the offending fields.
-
-   `partial` is what PATCH uses: the same schema with every key optional, so an
-   update can send one field without restating the whole document. */
+/* Parses `req.body` and REPLACES it with the result, so a route only sees
+   checked, trimmed, defaulted values. `partial` is what PATCH uses: every key
+   optional, so an update can send one field without restating the rest. */
 export const validate =
   (schema, { partial = false } = {}) =>
   (req, _res, next) => {

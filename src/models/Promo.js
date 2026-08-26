@@ -3,32 +3,27 @@ import { countriesField, dayField, slugField, statusField } from "./common.js";
 
 /* The on-load promo pop-up.
 
-   ⚠ This is the one content type whose SHAPE changed on the way into the CMS.
-   The site's content/base/promo.js is a single object, because a static file
-   can only describe one campaign at a time. Here it is a collection, so India
-   and Canada can run different campaigns at once and a future one can be
-   written and scheduled while the current one is still showing. The public
-   endpoint still hands the site exactly one promo (or null), so `usePromo()`
-   and PromoPopup keep the contract they already have.
+   ⚠ The one content type whose SHAPE changed on the way into the CMS: the
+   site's static promo.js is a single object, this is a collection, so two
+   countries can run different campaigns at once. The public endpoint still
+   hands the site exactly one promo (or null), so PromoPopup's contract holds.
 
-   `slug` is what the dismissal is remembered under in sessionStorage. Give a
-   new campaign a new slug and everyone sees it once, including people who
-   dismissed the last one — there is no flag to reset by hand. */
+   `slug` is what the dismissal is keyed on in sessionStorage — a new slug shows
+   the campaign to everyone again, with no flag to reset by hand. */
 const promoSchema = new mongoose.Schema(
   {
     slug: slugField,
     countries: countriesField,
     status: statusField,
 
-    /* An internal label for the admin list. Never rendered on the site — the
-       visitor-facing words are `heading` / `mark` / `body`. */
+    /* An internal label for the admin list. Never rendered on the site. */
     name: { type: String, trim: true, default: "" },
 
     eyebrow: { type: String, trim: true, default: "" },
 
-    /* ⚠ The heading is split in two on purpose: `heading` renders plain and
-       `mark` renders highlighted. Where the line breaks is an editorial
-       decision, so it has to stay something copy can move. */
+    /* ⚠ Split in two on purpose: `heading` renders plain, `mark` highlighted.
+       Where it breaks is an editorial decision, so copy has to be able to
+       move it. */
     heading: { type: String, trim: true, default: "" },
     mark: { type: String, trim: true, default: "" },
 
@@ -36,24 +31,21 @@ const promoSchema = new mongoose.Schema(
 
     cta: {
       label: { type: String, trim: true, default: "" },
-      /* An in-app route ("/events"), not an absolute URL — the popup closes
-         itself and the router navigates. */
+      /* An in-app route, not an absolute URL — the router navigates. */
       to: { type: String, trim: true, default: "/" },
     },
 
-    /* The secondary "Maybe later" text. Empty hides that button entirely. */
+    /* Empty hides the "Maybe later" button entirely. */
     dismiss: { type: String, trim: true, default: "" },
 
-    /* Optional scheduling window, inclusive on both ends. Either may be omitted
-       for "from now on" / "until further notice".
-       ⚠ Compared against the server's UTC calendar day, so a window boundary is
-       accurate to within a day rather than to the visitor's local midnight.
-       That is fine for a campaign window and wrong for anything time-critical. */
+    /* Optional window, inclusive both ends; either end may be omitted.
+       ⚠ Compared against the server's UTC day, so a boundary is accurate to
+       within a day — fine for a campaign, wrong for anything time-critical. */
     startsAt: dayField(false),
     endsAt: dayField(false),
 
-    /* Higher wins when more than one promo is eligible. A country-specific
-       promo already beats a global one regardless of this — see routes/promo.js. */
+    /* Higher wins among eligible promos, but a country-specific one already
+       beats a global one regardless. */
     priority: { type: Number, default: 0 },
   },
   { timestamps: true }

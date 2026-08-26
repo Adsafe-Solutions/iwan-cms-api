@@ -2,26 +2,20 @@ import { Resend } from "resend";
 import { CONFIG } from "../config.js";
 import { renderRegistrationConfirmation } from "./emails/registration.js";
 
-/* Transactional mail: the TRANSPORT only. What a message looks like lives in
-   emails/, so the markup can be changed without touching sending, and vice
-   versa.
+/* Transactional mail: the TRANSPORT only — markup lives in emails/.
 
-   ⚠ UNSET IS THE SWITCHED-OFF STATE, the same way VITE_CMS_API_URL is on the
-   site. With no RESEND_API_KEY nothing is sent and registration carries on
-   exactly as it did before this file existed — so a deployment that has not
-   been given a key yet still takes sign-ups rather than refusing to boot. */
+   ⚠ UNSET IS THE SWITCHED-OFF STATE. With no RESEND_API_KEY nothing is sent and
+   sign-ups carry on, so a deployment without a key still works. */
 
 const resend = CONFIG.resendApiKey ? new Resend(CONFIG.resendApiKey) : null;
 
 export const MAIL_ENABLED = Boolean(resend && CONFIG.mailFrom);
 
-/* The event's own date, printed as written. `date` is a plain day string, not a
-   timestamp, so there is no timezone to convert between.
+/* `date` is a plain day string, so there is no timezone to convert.
 
-   ⚠ `?? {}` rather than a default parameter. A default only fills in for
-   `undefined`, and the admin's resend passes the result of a findById — which
-   is NULL when the event has since been deleted. The registration itself
-   survives that deletion and can still be re-sent, so this has to cope. */
+   ⚠ `?? {}` rather than a default parameter: a default only fills in for
+   `undefined`, and the admin's resend passes a findById result, which is NULL
+   for a deleted event. The registration survives that and can still be sent. */
 const formatWhen = (event) => {
   const e = event ?? {};
   const time = [e.start, e.end].filter(Boolean).join("–");
@@ -31,19 +25,16 @@ const formatWhen = (event) => {
 /**
  * Sends the confirmation for one registration.
  *
- * ⚠ NEVER THROWS. The caller has already created the registration and
- * answered 201 — the person's place is booked. A mail outage must not turn a
- * successful sign-up into an error they are asked to retry, which would put a
- * second copy of them in the database. Failures are logged and reported in the
- * return value instead.
+ * ⚠ NEVER THROWS — the place is already booked, and a mail outage must not turn
+ * a successful sign-up into an error the person retries. Failures come back in
+ * the return value.
  *
  * @returns {Promise<{sent: boolean, reason?: string, id?: string}>}
  */
 export async function sendRegistrationConfirmation({ registration, event }) {
   if (!MAIL_ENABLED) return { sent: false, reason: "mail-disabled" };
 
-  /* A form with no email question stores an empty string — see the Registration
-     model. There is nowhere to send to, and that is not an error. */
+  /* A form with no email question stores "". Nowhere to send, not an error. */
   if (!registration?.email) return { sent: false, reason: "no-address" };
 
   const { subject, html, text } = renderRegistrationConfirmation({
@@ -57,9 +48,9 @@ export async function sendRegistrationConfirmation({ registration, event }) {
         : "",
   });
 
-  /* ⚠ The SDK REPORTS errors in the result rather than throwing them, so a
-     try/catch alone would treat a rejected send as a success. The catch is
-     still here for a network-level failure. */
+  /* ⚠ The SDK REPORTS errors in the result rather than throwing, so try/catch
+     alone would read a rejected send as a success. The catch covers the
+     network-level failure it does throw on. */
   try {
     const { data, error } = await resend.emails.send({
       from: CONFIG.mailFrom,

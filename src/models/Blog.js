@@ -4,13 +4,9 @@ import { sanitize } from "../lib/html.js";
 
 export const BLOCK_KINDS = ["h", "p", "li"];
 
-/* ⚠ DEPRECATED — the pre-rich-text body format.
-
-   Posts used to be `[["h", "…"], ["p", "…"], ["li", "…"]]`, which was as much
-   structure as the transcribed source pages carried. `html` below is the real
-   body now. This stays on the model only so the migration has something to read
-   and so nothing is destroyed on the way; delete it, and the `body` key in the
-   public payload, once the site renders `html`. */
+/* ⚠ DEPRECATED — the pre-rich-text body format, kept only so the migration has
+   something to read and nothing is destroyed on the way. `html` is the real
+   body now; delete this once nothing reads it. */
 const blockSchema = new mongoose.Schema(
   {
     kind: { type: String, enum: BLOCK_KINDS, required: true, default: "p" },
@@ -27,29 +23,23 @@ const blogSchema = new mongoose.Schema(
 
     title: { type: String, required: [true, "A title is required"], trim: true },
 
-    /* ⚠ Optional, and no date is ever invented for a post that has none — two
-       of the transcribed posts genuinely carry no date on the live site. The
-       site sorts undated posts last and renders them without a date line. */
+    /* ⚠ Optional, and no date is invented for a post without one — some
+       genuinely carry none. The site sorts those last. */
     date: dayField(false),
 
-    /* A nav path, same contract as an event's — see Event.js. */
+    /* A nav path — same contract as an event's. */
     programme: { type: String, trim: true, default: null },
 
     img: { type: String, trim: true, default: "" },
     excerpt: { type: String, trim: true, default: "" },
 
-    /* The post, as HTML from the rich-text editor.
-
-       ⚠ Sanitised by the setter below, so it is clean in the database rather
-       than merely clean when rendered. The setter is the last line of defence —
-       the write route sanitises too — and it is the one thing that also covers
-       the seed, the migration and anything written from a script. A setter runs
-       on `create`, on `doc.set()` and on `findOneAndUpdate`'s `$set`, which is
-       every path a value can reach this field by. */
+    /* ⚠ Sanitised by the setter below, so it is clean IN THE DATABASE rather
+       than merely clean when rendered. The route sanitises too; this is the
+       line that also covers the seed, the migration and anything scripted,
+       since a setter runs on every path a value can arrive by. */
     html: { type: String, default: "", set: sanitize },
 
-    /* ⚠ DEPRECATED — see blockSchema above. Derived from `html` on the way out;
-       no longer edited. */
+    /* ⚠ DEPRECATED — see blockSchema above. No longer edited. */
     body: { type: [blockSchema], default: [] },
   },
   { timestamps: true }

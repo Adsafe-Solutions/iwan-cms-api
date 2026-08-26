@@ -8,9 +8,9 @@ import {
   assertFormPresentWhenPublished,
 } from "./form.js";
 
-/* The write shapes. Unknown keys are STRIPPED rather than rejected, which is
-   what lets the admin PUT a whole record straight back — `id`, `createdAt` and
-   friends are simply ignored instead of having to be peeled off first. */
+/* The write shapes. Unknown keys are STRIPPED rather than rejected, so the
+   admin can PUT a whole record straight back without peeling off `id` and
+   `createdAt` first. */
 
 export const eventInput = z.object({
   slug: f.slug,
@@ -36,14 +36,13 @@ export const eventInput = z.object({
   details: f.longText(),
   agenda: z.array(f.agendaRow).max(40).default([]),
 
-  /* The registration form. See validators/form.js — the rules that need to see
-     the whole form (duplicate keys, empty choice lists) run in `beforeSave`,
-     because a per-field schema cannot check a field against its siblings. */
+  /* Rules needing the WHOLE form (duplicate keys, empty choice lists) run in
+     `beforeSave` — a per-field schema cannot check a field's siblings. */
   form: formInput,
 });
 
-/* Both run on the MERGED event, so a PATCH that changes only `status` is still
-   checked against the form the event already has. */
+/* Both run on the MERGED event, so a PATCH changing only `status` is still
+   checked against the form already stored. */
 export const assertEventIsSound = (event) => {
   assertFormIsCoherent(event.form ?? []);
   assertFormPresentWhenPublished(event);
@@ -61,15 +60,10 @@ export const blogInput = z.object({
   img: f.url,
   excerpt: f.text(600),
 
-  /* The post itself, as HTML from the rich-text editor.
-
-     ⚠ Sanitised here as well as by the model's setter. Not belt-and-braces for
-     its own sake: sanitising at THIS point means the length cap below is
-     measured on what will actually be stored, so a payload padded out with
-     100KB of `<script>` cannot slip under the limit and then shrink.
-
-     500KB is far more than any post needs and small enough that a paste-bomb
-     cannot fill the collection. */
+  /* ⚠ Sanitised here as well as by the model's setter, and not for its own
+     sake: doing it HERE means the length cap is measured on what will actually
+     be stored, so a payload padded with 100KB of `<script>` cannot slip under
+     the limit and then shrink. */
   html: z.string().max(500_000, "That post is too long").default("").transform(sanitize),
 });
 
@@ -81,8 +75,7 @@ export const episodeInput = z.object({
   title: z.string().trim().min(1, "A title is required").max(200),
   author: f.text(120),
   audio: z.string().trim().url("An audio URL is required"),
-  /* Seconds. Kept as data so a listing card can print a running time without
-     downloading several MB of audio to measure it. */
+  /* Seconds, so a card can print a running time without fetching the audio. */
   length: z.union([z.number().int().min(0).max(86_400), z.null()]).default(null),
   cover: f.url,
   order: z.number().int().default(0),
@@ -95,11 +88,10 @@ export const showInput = z.object({
   cover: f.url,
 });
 
-/* ⚠ A plain object, with no `.refine()` on it. A refined schema is a ZodEffects,
-   and ZodEffects has no `.partial()` — which is exactly what the PATCH path
-   calls. The start-before-end check therefore lives in `assertPromoWindow`
-   below, applied to the MERGED document, which is also the only way it can
-   catch a PATCH that moves just one end of the window. */
+/* ⚠ No `.refine()` here: a refined schema is a ZodEffects, which has no
+   `.partial()` — exactly what the PATCH path calls. The start-before-end check
+   lives in `assertPromoWindow`, on the MERGED document, which is also the only
+   way to catch a PATCH moving one end of the window. */
 export const promoInput = z.object({
   slug: f.slug,
   countries: f.countries,
@@ -126,10 +118,9 @@ export const assertPromoWindow = ({ startsAt, endsAt }) => {
   }
 };
 
-/* ⚠ The field is still called `email` because that is what the sign-in form
-   sends, but it now accepts EITHER an email address or a username. Validating
-   it as an email here would reject every username before the route ever saw
-   it. The route decides which it is, by looking for an "@". */
+/* ⚠ Still called `email` because that is what the sign-in form sends, but it
+   accepts either. Validating it as an email here would reject every username
+   before the route saw it; the route decides, by looking for an "@". */
 export const loginInput = z.object({
   email: z.string().trim().toLowerCase().min(1, "An email or username is required"),
   password: z.string().min(1, "A password is required"),
@@ -137,8 +128,8 @@ export const loginInput = z.object({
 
 export const userInput = z.object({
   email: z.string().trim().toLowerCase().email("That is not an email address"),
-  /* Optional. Empty string is normalised away so the sparse unique index sees
-     nothing rather than "" — several accounts with "" would collide. */
+  /* Empty string is normalised away, or several accounts with "" collide on
+     the sparse unique index. */
   username: z
     .union([
       z
@@ -151,8 +142,7 @@ export const userInput = z.object({
     .optional()
     .transform((v) => (v ? v : undefined)),
   name: f.text(120),
-  /* 10 rather than 8: these accounts are never rate-limited by a human typing
-     them, and there is no second factor behind them. */
+  /* 10 rather than 8: there is no second factor behind these accounts. */
   password: z.string().min(10, "Use at least 10 characters"),
   role: z.enum(["admin", "editor"]).default("editor"),
   countries: f.countries,

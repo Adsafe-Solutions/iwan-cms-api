@@ -3,9 +3,8 @@ import bcrypt from "bcryptjs";
 
 export const ROLES = ["admin", "editor"];
 
-/* A CMS editor. There is no public sign-up — accounts are made by an admin (or
-   by scripts/create-admin.js for the very first one), so there is no
-   verification flow, no password reset and nothing self-service here yet. */
+/* A CMS editor. No public sign-up: accounts are made by an admin, or by
+   scripts/create-admin.js for the first one. */
 const userSchema = new mongoose.Schema(
   {
     email: {
@@ -16,10 +15,8 @@ const userSchema = new mongoose.Schema(
       trim: true,
       match: [/^\S+@\S+\.\S+$/, "That is not an email address"],
     },
-    /* An optional short handle to sign in with, as an alternative to the email.
-       ⚠ `sparse` is what makes the unique index tolerate many accounts with no
-       username at all — without it, the second account leaving this blank would
-       collide with the first on a null value. */
+    /* ⚠ `sparse` is what lets the unique index tolerate many accounts with no
+       username — without it the second blank collides with the first. */
     username: {
       type: String,
       unique: true,
@@ -32,15 +29,13 @@ const userSchema = new mongoose.Schema(
 
     name: { type: String, trim: true, default: "" },
 
-    /* ⚠ `select: false`, so a plain `User.find()` can never leak hashes into a
-       response by accident. Anything that needs to verify a password has to ask
-       for it explicitly (`.select("+passwordHash")`). */
+    /* ⚠ `select: false`, so a plain `User.find()` cannot leak hashes. Asking
+       for it takes an explicit `.select("+passwordHash")`. */
     passwordHash: { type: String, required: true, select: false },
 
     role: { type: String, enum: ROLES, default: "editor" },
 
-    /* Which countries this account may edit. EMPTY means every country, the
-       same convention content documents use. An `admin` ignores it outright. */
+    /* EMPTY means every country, as everywhere else. `admin` ignores it. */
     countries: {
       type: [{ type: String, lowercase: true, trim: true }],
       default: [],
@@ -52,9 +47,7 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-/* Cost 12: ~250ms per hash on current hardware. Slow enough to make an offline
-   attack on a stolen dump expensive, fast enough that a login still feels
-   instant. */
+/* Cost 12 — ~250ms per hash: expensive to attack offline, instant to a user. */
 const ROUNDS = 12;
 
 userSchema.statics.hashPassword = (plain) => bcrypt.hash(plain, ROUNDS);

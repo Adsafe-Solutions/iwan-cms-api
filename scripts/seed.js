@@ -1,12 +1,11 @@
-/* CLI wrapper around scripts/seed-lib.js — see that file for what the seed
-   actually does and why it reads the public site's own content files.
+/* CLI wrapper around scripts/seed-lib.js.
 
      npm run seed                        # from ../iwan (the sibling checkout)
      npm run seed -- --from=/path/to/iwan/src/content/base
      npm run seed:reset                  # empty the content collections first
 
-   Idempotent: every document is upserted on its slug, so running it twice is
-   the same as running it once. It never touches user accounts. */
+   Idempotent — everything is upserted on its slug — and never touches user
+   accounts. */
 
 import path from "node:path";
 import mongoose from "mongoose";
@@ -25,10 +24,9 @@ const flag = (name) =>
 const source = path.resolve(flag("from") ?? DEFAULT_SOURCE);
 const reset = argv.includes("--reset");
 
-/* ⚠ The default is everything, which OVERWRITES every content type with
-   whatever the static files say. Once real content is being edited in the CMS,
-   name the type you actually mean — `--only=blogs` — or refreshing one silently
-   resets the other three. */
+/* ⚠ The default is everything, which OVERWRITES every content type from the
+   static files. Once real content is being edited, name the type you mean
+   (`--only=blogs`) or refreshing one resets the other three. */
 const only = (flag("only") ?? SEEDABLE.join(","))
   .split(",")
   .map((s) => s.trim())
@@ -47,8 +45,7 @@ async function main() {
   assertConfig();
 
   console.log(`[seed] source: ${source}`);
-  /* The password is stripped before the connection string is printed — this
-     output ends up in CI logs and terminal scrollback. */
+  /* Stripped before printing — this ends up in CI logs and scrollback. */
   console.log(`[seed] target: ${CONFIG.mongoUri.replace(/\/\/[^@]+@/, "//***@")}`);
   console.log(`[seed] types:  ${only.join(", ")}`);
 
@@ -58,8 +55,8 @@ async function main() {
 
   const counts = await seedInto({ source, reset, only });
 
-  /* Only the types that were actually asked for are reported — printing
-     "0 events" after `--only=blogs` reads like something failed. */
+  /* Only what was asked for: "0 events" after `--only=blogs` reads as a
+     failure. */
   const line = [
     only.includes("events") && `${counts.events} events`,
     only.includes("blogs") && `${counts.blogs} posts`,

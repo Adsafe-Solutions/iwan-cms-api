@@ -2,13 +2,10 @@ import { z } from "zod";
 import { COUNTRY_CODES } from "../lib/countries.js";
 import { BLOCK_KINDS } from "../models/Blog.js";
 
-/* Field-level validators shared by every content schema.
-
-   These sit IN FRONT of Mongoose's own validation rather than replacing it.
-   Mongoose is the last line — it also guards writes from the seed script and
-   anything else that bypasses a route — but a schema violation there surfaces
-   as a generic ValidationError, whereas Zod can report every bad field of a
-   submitted form at once, which is what the admin needs to show inline. */
+/* Field-level validators shared by every content schema. These sit IN FRONT of
+   Mongoose's validation rather than replacing it: Mongoose is the last line and
+   also guards the seed, but it reports one generic ValidationError, whereas Zod
+   reports every bad field at once — which is what the admin shows inline. */
 
 export const slug = z
   .string()
@@ -21,10 +18,9 @@ export const slug = z
     "Use lowercase letters, numbers and single hyphens"
   );
 
-/* ⚠ An EMPTY list means every country — it is not "no countries", and it is not
-   an incomplete form. Deduplicated so a double-clicked checkbox cannot store
-   ["in", "in"] and make `countries.length === 1` lie about the shape the
-   serialiser produces. */
+/* ⚠ An EMPTY list means EVERY country, not "no countries". Deduplicated so a
+   double-clicked checkbox cannot store ["in", "in"] and make a length check
+   lie. */
 export const countries = z
   .array(z.enum(COUNTRY_CODES))
   .default([])
@@ -32,8 +28,7 @@ export const countries = z
 
 export const status = z.enum(["draft", "published"]).default("draft");
 
-/* "YYYY-MM-DD", or empty for a field that allows no date at all.
-   ⚠ Never a Date: see the note in models/common.js. */
+/* "YYYY-MM-DD", or empty. ⚠ Never a Date — see models/common.js. */
 export const day = z
   .string()
   .trim()

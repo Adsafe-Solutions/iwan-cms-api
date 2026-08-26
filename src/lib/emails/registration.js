@@ -1,16 +1,12 @@
 /* The confirmation someone gets after registering for an event.
 
-   ⚠ THIS FILE IS THE ONE PLACE HEX COLOURS BELONG. The site forbids them in
-   src/ because Tailwind is its source of truth — but an email has no Tailwind,
-   no stylesheet and no build step. Every colour has to be written inline, on
-   the element, or mail clients drop it. The values below are copied from the
-   site's `ocean` theme in tailwind.config.js; change them there first.
+   ⚠ THE ONE PLACE HEX COLOURS BELONG. An email has no Tailwind and no build
+   step, so colours must be inline or clients drop them. The values are copied
+   from the site's `ocean` theme; change them there first.
 
    ⚠ TABLES, NOT DIVS, and inline styles rather than a <style> block. Outlook
-   renders through Word's HTML engine, which has no flexbox, no grid and
-   unreliable float support. Gmail strips <head> styles when it clips a long
-   message. Table layout with inline attributes is the only thing that renders
-   the same in Outlook, Gmail, Apple Mail and everything older. */
+   renders through Word's engine (no flexbox, no grid) and Gmail strips <head>
+   styles when it clips a message. */
 
 const BRAND = {
   primary: "#244967",
@@ -26,9 +22,8 @@ const BRAND = {
 const FONT =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'DM Sans', Roboto, Helvetica, Arial, sans-serif";
 
-/* ⚠ Everything interpolated below comes from a public form or from CMS copy.
-   Without escaping, a person registering as `<script>…` would have it rendered
-   by whatever client opens the message. */
+/* ⚠ Everything interpolated below comes from a public form. Without escaping,
+   someone registering as `<script>…` gets it rendered by the mail client. */
 export const escapeHtml = (value = "") =>
   String(value)
     .replace(/&/g, "&amp;")
@@ -37,7 +32,6 @@ export const escapeHtml = (value = "") =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-/* One label/value row in the details block. */
 const detailRow = (label, value) => `
               <tr>
                 <td style="padding:0 0 14px 0;font-family:${FONT};font-size:13px;line-height:18px;color:${BRAND.muted};font-weight:700;text-transform:uppercase;letter-spacing:0.08em;width:74px;vertical-align:top;">${escapeHtml(label)}</td>
@@ -45,10 +39,8 @@ const detailRow = (label, value) => `
               </tr>`;
 
 /**
- * Renders the confirmation.
- *
- * Every field is optional except the event title — an event with no venue or
- * no stated time simply drops that row rather than printing an empty one.
+ * Renders the confirmation. Every field is optional except the event title; a
+ * missing venue or time drops its row rather than printing an empty one.
  *
  * @returns {{subject: string, html: string, text: string}}
  */
@@ -63,17 +55,15 @@ export function renderRegistrationConfirmation({
   const greeting = name ? `Hi ${name},` : "Hi,";
   const subject = `You're registered: ${eventTitle}`;
 
-  /* ⚠ The preheader is the grey line a client previews next to the subject.
-     Left unset, clients scrape the first text they find — here that would be
-     the brand name in the header bar, which tells the reader nothing. */
+  /* ⚠ The grey preview line beside the subject. Left unset, clients scrape the
+     first text they find — here the brand name, which says nothing. */
   const preheader = `Your place at ${eventTitle} is confirmed.`;
 
   const rows = [when && detailRow("When", when), where && detailRow("Where", where)]
     .filter(Boolean)
     .join("");
 
-  /* ⚠ Outlook ignores padding on <a>, so the button needs a table cell to give
-     it a hit area and a background. */
+  /* ⚠ Outlook ignores padding on <a>, so the button needs a table cell. */
   const button = eventUrl
     ? `
             <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 0 0;">
@@ -156,8 +146,8 @@ ${button}
 </body>
 </html>`;
 
-  /* ⚠ The plain-text part is not optional. Some clients render only text, and
-     a message with no text/plain alternative scores worse with spam filters. */
+  /* ⚠ Not optional: some clients render only text, and a message without a
+     text/plain alternative scores worse with spam filters. */
   const text = [
     greeting,
     "",
