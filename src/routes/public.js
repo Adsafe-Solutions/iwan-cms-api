@@ -13,6 +13,7 @@ import {
   publicEpisode,
   publicPromo,
   publicShow,
+  publicShowMeta,
 } from "../lib/serialize.js";
 
 /* The read-only half of the API. Three rules hold everywhere in this file:
@@ -199,7 +200,9 @@ router.get(
       listEpisodes(req, country, 12),
     ]);
     cacheable(res);
-    res.json({ ...publicShow(show, []), ...episodes, episodes: episodes.items });
+    /* One list, under `items`, like every other paged route. It used to also
+       repeat it as `episodes`, which shipped the same array twice. */
+    res.json({ ...publicShowMeta(show), ...episodes });
   })
 );
 

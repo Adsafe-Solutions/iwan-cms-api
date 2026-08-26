@@ -106,18 +106,25 @@ export const publicEpisode = (doc) =>
     country: countryOf(doc.countries),
     title: doc.title,
     author: doc.author,
+    programme: doc.programme,
     audio: doc.audio,
+    video: doc.video,
     length: doc.length,
     cover: doc.cover,
     publishedOn: doc.publishedOn,
   });
 
-export const publicShow = (show, episodes = []) => ({
-  ...compact({
+/* The show's own fields. The paged route carries its episodes as `items`, so it
+   takes this rather than publicShow, which would add an empty `episodes`. */
+export const publicShowMeta = (show) =>
+  compact({
     title: show?.title ?? "",
     description: show?.description ?? "",
     cover: show?.cover ?? "",
-  }),
+  });
+
+export const publicShow = (show, episodes = []) => ({
+  ...publicShowMeta(show),
   episodes: episodes.map(publicEpisode),
 });
 
@@ -189,7 +196,9 @@ export const adminEpisode = (doc) => ({
   ...adminBase(doc),
   title: doc.title,
   author: doc.author,
+  programme: doc.programme ?? null,
   audio: doc.audio,
+  video: doc.video ?? "",
   length: doc.length ?? null,
   cover: doc.cover,
   order: doc.order ?? 0,

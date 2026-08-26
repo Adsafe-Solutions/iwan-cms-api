@@ -1,4 +1,4 @@
-import { User } from "../models/User.js";
+import { READ_ONLY_ROLES, User } from "../models/User.js";
 import { forbidden, unauthorized, wrap } from "../lib/errors.js";
 import { bearerFrom, verifyToken } from "../lib/tokens.js";
 
@@ -29,6 +29,19 @@ export const requireAuth = wrap(async (req, _res, next) => {
 
 export const requireAdmin = (req, _res, next) => {
   if (req.user?.role !== "admin") throw forbidden("Admins only");
+  next();
+};
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/* ⚠ Guards on the METHOD, not the path, and is mounted on the whole admin
+   router — so a route added later cannot be left writable by forgetting it.
+   Not a substitute for requireAdmin, which is a smaller set. */
+export const requireWriter = (req, _res, next) => {
+  if (SAFE_METHODS.has(req.method)) return next();
+  if (READ_ONLY_ROLES.includes(req.user?.role)) {
+    throw forbidden("Your account has read-only access");
+  }
   next();
 };
 

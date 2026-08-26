@@ -1,7 +1,12 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 
-export const ROLES = ["admin", "editor"];
+/* The one list of roles; validators/content.js reads it too. */
+export const ROLES = ["admin", "editor", "viewer"];
+
+/* ⚠ An explicit list, not "not an admin" — a role added above must be named
+   here to lose its write access, never the other way round. */
+export const READ_ONLY_ROLES = ["viewer"];
 
 /* A CMS editor. No public sign-up: accounts are made by an admin, or by
    scripts/create-admin.js for the first one. */

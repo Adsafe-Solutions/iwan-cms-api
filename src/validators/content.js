@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ROLES } from "../models/User.js";
 import * as f from "./fields.js";
 import { badRequest } from "../lib/errors.js";
 import { sanitize } from "../lib/html.js";
@@ -74,7 +75,9 @@ export const episodeInput = z.object({
 
   title: z.string().trim().min(1, "A title is required").max(200),
   author: f.text(120),
-  audio: z.string().trim().url("An audio URL is required"),
+  programme: f.programme,
+  audio: f.url,
+  video: f.url,
   /* Seconds, so a card can print a running time without fetching the audio. */
   length: z.union([z.number().int().min(0).max(86_400), z.null()]).default(null),
   cover: f.url,
@@ -144,10 +147,27 @@ export const userInput = z.object({
   name: f.text(120),
   /* 10 rather than 8: there is no second factor behind these accounts. */
   password: z.string().min(10, "Use at least 10 characters"),
-  role: z.enum(["admin", "editor"]).default("editor"),
+  role: z.enum(ROLES).default("editor"),
   countries: f.countries,
   active: z.boolean().default(true),
 });
+
+/* An episode is audio or video — exactly one. ⚠ Runs on the MERGED episode, so
+   a PATCH setting one is checked against the other rather than against nothing.
+   Both errors report on `audio`, which is the field the CMS's media control
+   is bound to. */
+export function assertEpisodePlayable(doc) {
+  if (!doc.audio && !doc.video) {
+    throw badRequest("An episode needs an audio or a video URL", [
+      { field: "audio", message: "Fill in an audio URL or a video URL." },
+    ]);
+  }
+  if (doc.audio && doc.video) {
+    throw badRequest("An episode is either audio or video, not both", [
+      { field: "audio", message: "Clear one of them — an episode plays one way." },
+    ]);
+  }
+}
 
 export const passwordChangeInput = z.object({
   currentPassword: z.string().min(1, "Your current password is required"),

@@ -548,9 +548,12 @@ await check("the podcast serves the show and its episodes together", async () =>
   });
   const { body } = await call("GET", "/api/podcast?country=in");
   assert.equal(body.title, "iwan.community");
-  assert.equal(body.episodes.length, 1);
-  assert.equal(body.episodes[0].id, "coco");
-  assert.equal(body.episodes[0].length, 348);
+  /* ⚠ `items`, like every other paged route. This used to also repeat the same
+     array as `episodes`, shipping it twice. */
+  assert.ok(!("episodes" in body), "/api/podcast still carries a duplicate array");
+  assert.equal(body.items.length, 1);
+  assert.equal(body.items[0].id, "coco");
+  assert.equal(body.items[0].length, 348);
 });
 
 console.log("\nregistrations");
@@ -798,6 +801,112 @@ await check("a registration reports what is known about its confirmation", async
   assert.equal(row.confirmationSentAt, null);
 });
 
+console.log("\npodcast episodes");
+
+/* An episode plays as audio or as video; one of the two has to be there. */
+
+await check("an episode with only a VIDEO url is accepted", async () => {
+  const { status, body } = await call("POST", "/api/admin/episodes", {
+    token,
+    body: {
+      slug: "video-only",
+      title: "Video only",
+      countries: [],
+      status: "published",
+      video: "https://example.com/ep.mp4",
+    },
+  });
+  assert.equal(status, 201);
+  assert.equal(body.video, "https://example.com/ep.mp4");
+  assert.equal(body.audio, "");
+});
+
+await check("an episode with only an AUDIO url is accepted", async () => {
+  const { status } = await call("POST", "/api/admin/episodes", {
+    token,
+    body: {
+      slug: "audio-only",
+      title: "Audio only",
+      countries: [],
+      status: "published",
+      audio: "https://example.com/ep.mp3",
+    },
+  });
+  assert.equal(status, 201);
+});
+
+await check("⚠ an episode with BOTH urls is refused", async () => {
+  const { status, body } = await call("POST", "/api/admin/episodes", {
+    token,
+    body: {
+      slug: "both-urls",
+      title: "Both",
+      countries: [],
+      status: "draft",
+      audio: "https://example.com/ep.mp3",
+      video: "https://example.com/ep.mp4",
+    },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error, /not both/i);
+});
+
+await check("⚠ a PATCH cannot add the second url either", async () => {
+  const { body: list } = await call("GET", "/api/admin/episodes?q=audio-only", { token });
+  const ep = list.items.find((e) => e.slug === "audio-only");
+  const { status } = await call("PATCH", `/api/admin/episodes/${ep.id}`, {
+    token,
+    body: { video: "https://example.com/ep.mp4" },
+  });
+  assert.equal(status, 400);
+});
+
+await check("⚠ an episode with NEITHER url is refused", async () => {
+  const { status, body } = await call("POST", "/api/admin/episodes", {
+    token,
+    body: { slug: "silent", title: "Silent", countries: [], status: "draft" },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error, /audio or a video/i);
+});
+
+await check("⚠ a PATCH cannot clear the last remaining url", async () => {
+  /* Checked on the MERGED document — the patch alone says nothing about the
+     field it is not touching. */
+  const { body: list } = await call("GET", "/api/admin/episodes?q=audio-only", { token });
+  const ep = list.items.find((e) => e.slug === "audio-only");
+  const { status } = await call("PATCH", `/api/admin/episodes/${ep.id}`, {
+    token,
+    body: { audio: "" },
+  });
+  assert.equal(status, 400);
+});
+
+await check("an episode can be filed under a programme", async () => {
+  const { body: list } = await call("GET", "/api/admin/episodes?q=video-only", { token });
+  const ep = list.items.find((e) => e.slug === "video-only");
+  const { status, body } = await call("PATCH", `/api/admin/episodes/${ep.id}`, {
+    token,
+    body: { programme: "/iwan-youth" },
+  });
+  assert.equal(status, 200);
+  assert.equal(body.programme, "/iwan-youth");
+
+  /* And the filter that crud.js offers to any type carrying the field. */
+  const filtered = await call("GET", "/api/admin/episodes?programme=/iwan-youth", {
+    token,
+  });
+  assert.ok(filtered.body.items.some((e) => e.slug === "video-only"));
+});
+
+await check("the site is served both urls", async () => {
+  const { body } = await call("GET", "/api/podcast");
+  const ep = body.items.find((e) => e.id === "video-only");
+  assert.ok(ep, "video-only episode missing from the public payload");
+  assert.equal(ep.video, "https://example.com/ep.mp4");
+  assert.equal(ep.programme, "/iwan-youth");
+});
+
 console.log("\nthe programme filter");
 
 await check("filtering by programme narrows the admin list", async () => {
@@ -968,6 +1077,247 @@ await check("the last admin cannot be demoted", async () => {
     body: { role: "editor" },
   });
   assert.equal(status, 400);
+});
+
+console.log("\nwhat a scoped account can SEE");
+
+/* A global document appears on every country's site, so a scoped account has
+   to see it in the CMS too — otherwise the CMS disagrees with the site. */
+
+const SCOPE_PASSWORD = secret();
+let bothToken = null;
+let indiaToken = null;
+
+await check("a global blog exists to be found", async () => {
+  const { status } = await call("POST", "/api/admin/blogs", {
+    token,
+    body: {
+      slug: "everywhere-post",
+      title: "Everywhere post",
+      countries: [],
+      status: "published",
+      html: "<p>Shown in every country.</p>",
+    },
+  });
+  assert.equal(status, 201);
+});
+
+await check("accounts scoped to one country and to both can sign in", async () => {
+  for (const [email, countries] of [
+    ["both@iwan.community", ["in", "ca"]],
+    ["india-only@iwan.community", ["in"]],
+  ]) {
+    const made = await call("POST", "/api/admin/users", {
+      token,
+      body: { email, password: SCOPE_PASSWORD, role: "editor", countries },
+    });
+    assert.equal(made.status, 201, `could not create ${email}`);
+  }
+  const both = await call("POST", "/api/auth/login", {
+    body: { email: "both@iwan.community", password: SCOPE_PASSWORD },
+  });
+  bothToken = both.body.token;
+  const india = await call("POST", "/api/auth/login", {
+    body: { email: "india-only@iwan.community", password: SCOPE_PASSWORD },
+  });
+  indiaToken = india.body.token;
+  assert.ok(bothToken && indiaToken);
+});
+
+await check("⚠ an editor holding BOTH countries sees a global item", async () => {
+  const { body } = await call("GET", "/api/admin/blogs", { token: bothToken });
+  const slugs = body.items.map((b) => b.slug);
+  assert.ok(
+    slugs.includes("everywhere-post"),
+    `an account holding every country could not see a global post: ${slugs.join(", ")}`
+  );
+});
+
+await check("⚠ an editor scoped to ONE country sees a global item too", async () => {
+  const { body } = await call("GET", "/api/admin/blogs", { token: indiaToken });
+  const slugs = body.items.map((b) => b.slug);
+  assert.ok(
+    slugs.includes("everywhere-post"),
+    "a global post was hidden from a scoped editor"
+  );
+});
+
+await check("a scoped account still cannot see ANOTHER country's item", async () => {
+  const made = await call("POST", "/api/admin/blogs", {
+    token,
+    body: { slug: "canada-only-post", title: "Canada only", countries: ["ca"] },
+  });
+  assert.equal(made.status, 201);
+  const { body } = await call("GET", "/api/admin/blogs", { token: indiaToken });
+  const slugs = body.items.map((b) => b.slug);
+  assert.ok(
+    !slugs.includes("canada-only-post"),
+    "an India editor saw a Canada-only post"
+  );
+});
+
+await check("⚠ seeing a global item is not being able to change it", async () => {
+  /* Visibility widened; the write rule did not move. */
+  const { body } = await call("GET", "/api/admin/blogs", { token: indiaToken });
+  const post = body.items.find((b) => b.slug === "everywhere-post");
+  assert.ok(post, "nothing to try to edit");
+  const { status } = await call("PATCH", `/api/admin/blogs/${post.id}`, {
+    token: indiaToken,
+    body: { title: "Rewritten by a scoped editor" },
+  });
+  assert.equal(status, 403);
+});
+
+await check("⚠ a scoped account cannot read another country's item BY ID", async () => {
+  /* The scope belongs to the account, not to one route. */
+  const { body: all } = await call("GET", "/api/admin/blogs", { token });
+  const canada = all.items.find((b) => b.slug === "canada-only-post");
+  assert.ok(canada, "fixture missing");
+
+  const mine = await call("GET", `/api/admin/blogs/${canada.id}`, { token: indiaToken });
+  assert.equal(mine.status, 404);
+
+  /* An admin still reads it, so this is a scope and not a broken route. */
+  const asAdmin = await call("GET", `/api/admin/blogs/${canada.id}`, { token });
+  assert.equal(asAdmin.status, 200);
+});
+
+await check("⚠ searching cannot widen what a scoped account sees", async () => {
+  /* Two top-level `$or`s would replace each other; both live under `$and`. */
+  const { body } = await call("GET", "/api/admin/blogs?q=Canada", { token: indiaToken });
+  const slugs = body.items.map((b) => b.slug);
+  assert.ok(
+    !slugs.includes("canada-only-post"),
+    `search leaked an out-of-scope row: ${slugs.join(", ")}`
+  );
+});
+
+console.log("\nroles");
+
+/* A viewer is defined by what it cannot do, so these are mostly refusals —
+   one per route family, since the guard is mounted router-wide. */
+
+const VIEWER_PASSWORD = secret();
+let viewerToken = null;
+
+await check("an admin can create a viewer", async () => {
+  const { status, body } = await call("POST", "/api/admin/users", {
+    token,
+    body: {
+      email: "viewer@iwan.community",
+      name: "Viewer",
+      password: VIEWER_PASSWORD,
+      role: "viewer",
+    },
+  });
+  assert.equal(status, 201);
+  assert.equal(body.role, "viewer");
+});
+
+await check("a viewer can sign in", async () => {
+  const { status, body } = await call("POST", "/api/auth/login", {
+    body: { email: "viewer@iwan.community", password: VIEWER_PASSWORD },
+  });
+  assert.equal(status, 200);
+  viewerToken = body.token;
+  assert.equal(body.user.role, "viewer");
+});
+
+await check("a viewer CAN read content", async () => {
+  const { status, body } = await call("GET", "/api/admin/events", { token: viewerToken });
+  assert.equal(status, 200);
+  assert.ok(body.items.length >= 1, "a viewer saw no events");
+});
+
+await check("a viewer CAN read registrations and export them", async () => {
+  const list = await call("GET", "/api/admin/registrations", { token: viewerToken });
+  assert.equal(list.status, 200);
+  const res = await fetch(`${base}/api/admin/registrations/export`, {
+    headers: { authorization: `Bearer ${viewerToken}` },
+  });
+  assert.equal(res.status, 200);
+});
+
+await check("⚠ a viewer cannot CREATE content", async () => {
+  const { status } = await call("POST", "/api/admin/blogs", {
+    token: viewerToken,
+    body: { slug: "viewer-post", title: "Nope", countries: [], status: "draft" },
+  });
+  assert.equal(status, 403);
+});
+
+await check("⚠ a viewer cannot EDIT content", async () => {
+  const { body: list } = await call("GET", "/api/admin/events", { token: viewerToken });
+  const { status } = await call("PATCH", `/api/admin/events/${list.items[0].id}`, {
+    token: viewerToken,
+    body: { title: "Renamed by a viewer" },
+  });
+  assert.equal(status, 403);
+});
+
+await check("⚠ a viewer cannot DELETE content", async () => {
+  const { body: list } = await call("GET", "/api/admin/blogs", { token: viewerToken });
+  const { status } = await call("DELETE", `/api/admin/blogs/${list.items[0].id}`, {
+    token: viewerToken,
+  });
+  assert.equal(status, 403);
+});
+
+await check("⚠ a viewer cannot change a registration or resend its email", async () => {
+  const { body: list } = await call("GET", "/api/admin/registrations", {
+    token: viewerToken,
+  });
+  const id = list.items[0].id;
+  const patched = await call("PATCH", `/api/admin/registrations/${id}`, {
+    token: viewerToken,
+    body: { status: "confirmed" },
+  });
+  assert.equal(patched.status, 403);
+  /* A POST, and refused for the same reason — it puts mail in an inbox. */
+  const resent = await call("POST", `/api/admin/registrations/${id}/resend`, {
+    token: viewerToken,
+  });
+  assert.equal(resent.status, 403);
+});
+
+await check("⚠ a viewer cannot write the podcast show", async () => {
+  const { status } = await call("PUT", "/api/admin/podcast/show", {
+    token: viewerToken,
+    body: { title: "Nope", description: "", cover: "" },
+  });
+  assert.equal(status, 403);
+});
+
+await check("⚠ a viewer cannot reach accounts at all", async () => {
+  const read = await call("GET", "/api/admin/users", { token: viewerToken });
+  assert.equal(read.status, 403);
+  const write = await call("POST", "/api/admin/users", {
+    token: viewerToken,
+    body: { email: "x@y.com", name: "X", password: secret(), role: "admin" },
+  });
+  assert.equal(write.status, 403);
+});
+
+await check("a viewer CAN still change its own password", async () => {
+  /* ⚠ Under /api/auth, so the write guard does not reach it — and must not. */
+  const { status } = await call("POST", "/api/auth/change-password", {
+    token: viewerToken,
+    body: { currentPassword: VIEWER_PASSWORD, newPassword: secret() },
+  });
+  assert.equal(status, 200);
+});
+
+await check("⚠ an admin cannot demote ITSELF to viewer", async () => {
+  /* Proved above for `editor`; repeated for `viewer` because a third role is
+     what turns a two-value rule into a wrong one. */
+  const { body } = await call("GET", "/api/admin/users", { token });
+  const me = body.items.find((u) => u.email === "smoke@iwan.community");
+  const { status, body: err } = await call("PATCH", `/api/admin/users/${me.id}`, {
+    token,
+    body: { role: "viewer" },
+  });
+  assert.equal(status, 400);
+  assert.match(err.error, /own admin role/i);
 });
 
 console.log("\nthe one call the site makes");

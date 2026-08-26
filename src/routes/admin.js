@@ -15,6 +15,7 @@ import {
   adminUser,
 } from "../lib/serialize.js";
 import {
+  assertEpisodePlayable,
   assertEventIsSound,
   assertPromoWindow,
   blogInput,
@@ -24,7 +25,7 @@ import {
   showInput,
   userInput,
 } from "../validators/content.js";
-import { requireAdmin, requireAuth } from "../middleware/auth.js";
+import { requireAdmin, requireAuth, requireWriter } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { badRequest, notFound, wrap } from "../lib/errors.js";
 import { COUNTRY_CODES } from "../lib/countries.js";
@@ -35,6 +36,8 @@ import { COUNTRY_CODES } from "../lib/countries.js";
 const router = Router();
 
 router.use(requireAuth);
+/* ⚠ Before any route, so no route has to restate it. */
+router.use(requireWriter);
 
 /* What the admin needs to render its forms without hard-coding any of it.
 
@@ -42,11 +45,15 @@ router.use(requireAuth);
    so the admin's dropdown and the API's validation agree. It has to be updated
    alongside the site: an unmatched path renders as unfiled rather than
    failing loudly. */
+/* ⚠ `color` is the programme's own colour from the SITE's tailwind.config.js
+   palette, copied here so the CMS can tint a programme pill with it. It has to
+   be updated alongside the site, like the paths and labels above it. Served as
+   a hex because the admin's Tailwind knows nothing about these four. */
 const PROGRAMMES = [
-  { path: "/iwan-men", label: "Iwan Men" },
-  { path: "/iwan-women", label: "Iwan Women" },
-  { path: "/iwan-youth", label: "Iwan Youth" },
-  { path: "/iwan-kids", label: "Iwan Kids" },
+  { path: "/iwan-men", label: "Iwan Men", color: "#234967" },
+  { path: "/iwan-women", label: "Iwan Women", color: "#ee5f9e" },
+  { path: "/iwan-youth", label: "Iwan Youth", color: "#3994b3" },
+  { path: "/iwan-kids", label: "Iwan Kids", color: "#3694db" },
 ];
 
 router.get("/meta", (_req, res) => {
@@ -91,6 +98,7 @@ router.use(
     serialize: adminEpisode,
     sort: { order: 1, createdAt: 1 },
     searchFields: ["title", "slug", "author"],
+    beforeSave: assertEpisodePlayable,
   })
 );
 
@@ -176,7 +184,9 @@ router.patch(
       }
     }
 
-    if (rest.role === "editor" || rest.active === false) {
+    /* ⚠ Any role that is NOT admin — naming them one by one stops covering the
+       next role added. Backstop; the self-check above is what fires. */
+    if ((rest.role && rest.role !== "admin") || rest.active === false) {
       const admins = await User.countDocuments({ role: "admin", active: true });
       if (admins <= 1 && user.role === "admin" && user.active) {
         throw badRequest("This is the last active admin");

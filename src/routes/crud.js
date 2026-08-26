@@ -33,14 +33,23 @@ export function crudRouter({
 }) {
   const router = Router();
 
-  /* An unscoped account sees everything; a scoped editor sees only documents
-     naming one of their countries. That hides global documents from them too,
-     deliberately: `assertCountryScope` would refuse the edit anyway, and a list
-     of rows that cannot be opened is worse than a shorter list. */
+  /* What an account can SEE, which is not what it can CHANGE — a document is
+     visible if it is global (empty list) or names one of the account's
+     countries. Excluding global ones hid every seeded blog from scoped users.
+
+     ⚠ A clause for `$and`, never spread onto the query: the listing builds its
+     own top-level `$or` for search, which would REPLACE this one. */
   const visibleTo = (user) =>
     user.role === "admin" || !user.countries?.length
-      ? {}
-      : { countries: { $in: user.countries } };
+      ? null
+      : {
+          $or: [{ countries: { $size: 0 } }, { countries: { $in: user.countries } }],
+        };
+
+  const withScope = (user, query = {}) => {
+    const scope = visibleTo(user);
+    return scope ? { ...query, $and: [...(query.$and ?? []), scope] } : query;
+  };
 
   /* The admin listing. Drafts included; that is the whole point. */
   router.get(
@@ -51,7 +60,7 @@ export function crudRouter({
       const page = Math.max(1, Number(req.query.page) || 1);
       const limit = Math.min(MAX_LIMIT, Math.max(1, Number(req.query.limit) || 50));
 
-      const where = { ...visibleTo(req.user) };
+      const where = withScope(req.user);
 
       /* ⚠ An exact match, NOT the public `countryQuery` — folding in every
          global row would make the filter mean something else. */
@@ -89,7 +98,9 @@ export function crudRouter({
   router.get(
     "/:id",
     wrap(async (req, res) => {
-      const doc = await model.findById(req.params.id).lean();
+      /* ⚠ Scoped like the listing — without it a row hidden from the list was
+         still readable by pasting its id. Out of scope reads as missing. */
+      const doc = await model.findOne(withScope(req.user, { _id: req.params.id })).lean();
       if (!doc) throw notFound();
       res.json(serialize(doc));
     })

@@ -25,19 +25,21 @@ const episodeSchema = new mongoose.Schema(
     title: { type: String, required: [true, "A title is required"], trim: true },
     author: { type: String, trim: true, default: "" },
 
-    /* A direct URL — the player points a native <audio> straight at it. */
-    audio: {
-      type: String,
-      required: [true, "An audio URL is required"],
-      trim: true,
-    },
+    /* ⚠ Neither is required on its own, but an episode needs ONE of them —
+       enforced on the merged document in validators/content.js, since a PATCH
+       can clear one without mentioning the other. */
+    audio: { type: String, trim: true, default: "" },
+    video: { type: String, trim: true, default: "" },
 
     /* ⚠ SECONDS, kept as data rather than read off the file: the player is
        preload="none", so a card would otherwise fetch several MB to print a
        duration. */
     length: { type: Number, min: 0, default: null },
 
-    /* Falls back to the show's cover. */
+    /* A nav path — same contract as a blog's or an event's. */
+    programme: { type: String, trim: true, default: null },
+
+    /* Cover image. Falls back to the show's artwork. */
     cover: { type: String, trim: true, default: "" },
 
     /* Ascending; ties break on creation date. */
