@@ -147,6 +147,24 @@ export function summarise(answers = []) {
       "");
 
   const email = answers.find((a) => a.type === "email" && a.value)?.value ?? "";
+  const mobile = answers.find((a) => a.type === "phone" && a.value)?.value ?? "";
 
-  return { name: name.slice(0, 200), email };
+  /* ⚠ Whether this person also joined the newsletter. Read off a CONSENT answer
+     whose key or label mentions subscribing, so an event opts its registrants
+     in only when its own form asked — nothing is assumed on their behalf. An
+     event that does not ask still reaches the audience list, just not the
+     newsletter. */
+  const subscribe = Boolean(
+    answers.find(
+      (a) =>
+        a.type === "consent" && /subscrib|newsletter|updates/i.test(`${a.key} ${a.label}`)
+    )?.value
+  );
+
+  return {
+    name: name.slice(0, 200),
+    email,
+    mobile: String(mobile).slice(0, 32),
+    subscribe,
+  };
 }

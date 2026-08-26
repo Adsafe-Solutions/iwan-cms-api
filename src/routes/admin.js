@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { crudRouter } from "./crud.js";
 import registrationRoutes from "./registrations.js";
+import audienceRoutes, { applicationRouter } from "./audience.js";
 import { Event } from "../models/Event.js";
 import { Blog } from "../models/Blog.js";
 import { PodcastEpisode, PodcastShow } from "../models/Podcast.js";
@@ -140,6 +141,8 @@ router
   );
 
 router.use("/registrations", registrationRoutes);
+router.use("/audience", audienceRoutes);
+router.use("/applications", applicationRouter);
 
 /* Admins only: an editor who could create accounts could create an unscoped
    one and step around their own country scope. */

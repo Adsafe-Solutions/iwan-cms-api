@@ -6,6 +6,7 @@ import { badRequest, notFound, wrap } from "../lib/errors.js";
 import { COUNTRY_CODES, countryQuery, isCountryCode } from "../lib/countries.js";
 import { buildAnswers, summarise } from "../validators/registration.js";
 import { sendRegistrationConfirmation } from "../lib/mail.js";
+import { recordAudience } from "../lib/audience.js";
 
 /* The one route the public can WRITE to, and therefore the whole attack surface
    for spam and junk data — hence the rate limits below, the capacity check, and
@@ -69,7 +70,8 @@ router.post(
     /* ⚠ Validated against the event's CURRENT form, not against whatever the
        browser thinks the form is. */
     const answers = buildAnswers(event.form, req.body?.answers ?? req.body ?? {});
-    const { name, email } = summarise(answers);
+    const summarised = summarise(answers);
+    const { name, email } = summarised;
 
     /* Counted at submit time rather than kept as a running total: two
        simultaneous submissions can both pass, putting the event one over rather
@@ -96,6 +98,29 @@ router.post(
       answers,
       name,
       email,
+    });
+
+    /* ⚠ Awaited, unlike the confirmation email below. This is a database write
+       to the same cluster, not a call to a third party, and a sign-up that
+       silently failed to reach the audience list is the kind of gap nobody
+       notices until a mailout goes out short. `subscribe` comes off the form
+       when it asks; an event that does not ask still adds the person, just not
+       to the newsletter. */
+    await recordAudience({
+      email,
+      name,
+      mobile: summarised.mobile,
+      /* ⚠ Sent alongside the answers, not inside them: buildAnswers drops any
+         key the event's own form does not define, so a checkbox the SITE adds
+         to every form would never survive validation. An event whose form asks
+         the question itself still works — summarise reads that consent — and
+         this only takes over when the caller states it outright. */
+      subscribe:
+        typeof req.body?.subscribe === "boolean"
+          ? req.body.subscribe
+          : summarised.subscribe,
+      source: "event",
+      country,
     });
 
     /* ⚠ Deliberately thin — this response is public, so the less it says about

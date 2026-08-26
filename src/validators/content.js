@@ -77,7 +77,7 @@ export const episodeInput = z.object({
   author: f.text(120),
   programme: f.programme,
   audio: f.url,
-  video: f.url,
+  video: f.youtubeUrl,
   /* Seconds, so a card can print a running time without fetching the audio. */
   length: z.union([z.number().int().min(0).max(86_400), z.null()]).default(null),
   cover: f.url,

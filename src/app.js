@@ -6,6 +6,7 @@ import mongoose from "mongoose";
 import { CONFIG, isProduction } from "./config.js";
 import publicRoutes from "./routes/public.js";
 import registerRoutes from "./routes/register.js";
+import formRoutes from "./routes/forms.js";
 import adminRoutes from "./routes/admin.js";
 import authRoutes from "./routes/auth.js";
 import { errorHandler, notFoundHandler } from "./middleware/error.js";
@@ -71,6 +72,10 @@ export function createApp() {
   /* ⚠ The only route the public can WRITE to, mounted first so its own rate
      limit applies to it and nothing else. */
   app.use("/api", registerRoutes);
+  /* The other public writes — subscribe, contact, volunteer, career. Mounted
+     beside register for the same reason: their own rate limits apply here and
+     nowhere else. */
+  app.use("/api", formRoutes);
   app.use("/api/admin", adminRoutes);
   /* Last: its routes are the broadest and would swallow a future /api/admin-
      like path mounted after it. */

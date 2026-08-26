@@ -253,6 +253,45 @@ export const adminRegistration = (doc) => ({
   updatedAt: doc.updatedAt,
 });
 
+export const adminAudience = (doc) => ({
+  id: String(doc._id),
+  email: doc.email,
+  name: doc.name ?? "",
+  mobile: doc.mobile ?? "",
+  subscribed: Boolean(doc.subscribed),
+  sources: doc.sources ?? [],
+  country: doc.country ?? null,
+  note: doc.note ?? "",
+  messages: (doc.messages ?? []).map((m) => ({
+    subject: m.subject ?? "",
+    body: m.body ?? "",
+    country: m.country ?? null,
+    at: m.at,
+  })),
+  firstSeenAt: doc.createdAt,
+  lastSeenAt: doc.lastSeenAt ?? doc.updatedAt,
+});
+
+export const adminApplication = (doc) => ({
+  id: String(doc._id),
+  kind: doc.kind,
+  email: doc.email,
+  name: doc.name ?? "",
+  mobile: doc.mobile ?? "",
+  role: doc.role ?? "",
+  country: doc.country,
+  status: doc.status,
+  note: doc.note ?? "",
+  answers: (doc.answers ?? []).map((a) => ({
+    key: a.key,
+    label: a.label,
+    type: a.type,
+    value: a.value ?? null,
+  })),
+  submittedAt: doc.createdAt,
+  updatedAt: doc.updatedAt,
+});
+
 export const adminUser = (doc) => ({
   id: String(doc._id),
   email: doc.email,

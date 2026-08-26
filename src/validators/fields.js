@@ -50,6 +50,36 @@ export const text = (max = 400) => z.string().trim().max(max).default("");
 
 export const longText = (max = 8000) => z.string().trim().max(max).default("");
 
+/* The id out of any YouTube URL people actually paste — watch, youtu.be, embed,
+   shorts, live, with or without extra query params. Null when it is not one.
+   ⚠ Mirrored on the site in src/lib/podcast.js; change both. */
+const YOUTUBE = [
+  /[?&]v=([A-Za-z0-9_-]{11})/,
+  /youtu\.be\/([A-Za-z0-9_-]{11})/,
+  /youtube(?:-nocookie)?\.com\/(?:embed|shorts|live|v)\/([A-Za-z0-9_-]{11})/,
+];
+
+export const youtubeId = (value = "") => {
+  const text = String(value);
+  if (!/^https?:\/\/([\w-]+\.)*(youtube(-nocookie)?\.com|youtu\.be)\//i.test(text)) {
+    return null;
+  }
+  for (const re of YOUTUBE) {
+    const m = text.match(re);
+    if (m) return m[1];
+  }
+  return null;
+};
+
+/* A YouTube link, or empty. Anything else is refused rather than stored and
+   silently failing to embed later. */
+export const youtubeUrl = z
+  .union([z.string().trim(), z.literal("")])
+  .default("")
+  .refine((v) => v === "" || Boolean(youtubeId(v)), {
+    message: "That is not a YouTube link",
+  });
+
 export const url = z
   .union([z.string().trim().url("That is not a valid URL"), z.literal("")])
   .default("");

@@ -805,6 +805,21 @@ console.log("\npodcast episodes");
 
 /* An episode plays as audio or as video; one of the two has to be there. */
 
+await check("⚠ a video url that is not YouTube is refused", async () => {
+  const { status, body } = await call("POST", "/api/admin/episodes", {
+    token,
+    body: {
+      slug: "not-youtube",
+      title: "Not YouTube",
+      countries: [],
+      status: "draft",
+      video: "https://example.com/ep.mp4",
+    },
+  });
+  assert.equal(status, 400);
+  assert.match(JSON.stringify(body.details ?? body), /YouTube/i);
+});
+
 await check("an episode with only a VIDEO url is accepted", async () => {
   const { status, body } = await call("POST", "/api/admin/episodes", {
     token,
@@ -813,11 +828,11 @@ await check("an episode with only a VIDEO url is accepted", async () => {
       title: "Video only",
       countries: [],
       status: "published",
-      video: "https://example.com/ep.mp4",
+      video: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     },
   });
   assert.equal(status, 201);
-  assert.equal(body.video, "https://example.com/ep.mp4");
+  assert.equal(body.video, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   assert.equal(body.audio, "");
 });
 
@@ -844,7 +859,7 @@ await check("⚠ an episode with BOTH urls is refused", async () => {
       countries: [],
       status: "draft",
       audio: "https://example.com/ep.mp3",
-      video: "https://example.com/ep.mp4",
+      video: "https://youtu.be/dQw4w9WgXcQ",
     },
   });
   assert.equal(status, 400);
@@ -856,7 +871,7 @@ await check("⚠ a PATCH cannot add the second url either", async () => {
   const ep = list.items.find((e) => e.slug === "audio-only");
   const { status } = await call("PATCH", `/api/admin/episodes/${ep.id}`, {
     token,
-    body: { video: "https://example.com/ep.mp4" },
+    body: { video: "https://youtu.be/dQw4w9WgXcQ" },
   });
   assert.equal(status, 400);
 });
@@ -903,7 +918,7 @@ await check("the site is served both urls", async () => {
   const { body } = await call("GET", "/api/podcast");
   const ep = body.items.find((e) => e.id === "video-only");
   assert.ok(ep, "video-only episode missing from the public payload");
-  assert.equal(ep.video, "https://example.com/ep.mp4");
+  assert.equal(ep.video, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   assert.equal(ep.programme, "/iwan-youth");
 });
 
@@ -1318,6 +1333,216 @@ await check("⚠ an admin cannot demote ITSELF to viewer", async () => {
   });
   assert.equal(status, 400);
   assert.match(err.error, /own admin role/i);
+});
+
+console.log("\nthe audience");
+
+/* Every public form funnels into one row per person, keyed on the email. The
+   merge rule is the part worth proving: a later form fills blanks and never
+   overwrites, so a hurried name cannot degrade a good one. */
+
+const PERSON = "newcomer@example.com";
+
+await check("⚠ an event sign-up reaches the audience by itself", async () => {
+  /* Nobody subscribed here — registering for an event is enough to be a
+     contactable person, which is the whole point of one list. */
+  const { body } = await call("GET", "/api/admin/audience?q=aisha@example.com", {
+    token,
+  });
+  assert.equal(body.total, 1, "the registration fixture never reached the audience");
+  assert.ok(body.items[0].sources.includes("event"));
+  assert.equal(body.items[0].name, "Aisha Rahman", "the name did not come across");
+});
+
+await check("⚠ an event sign-up carries its own subscribe flag", async () => {
+  /* The site adds the checkbox to every event, so it travels beside the answers
+     rather than inside them — buildAnswers would drop a key the form does not
+     define. */
+  await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: {
+      answers: REG({ email: "optin@example.com" }),
+      subscribe: true,
+    },
+  });
+  const { body } = await call("GET", "/api/admin/audience?q=optin@example.com", {
+    token,
+  });
+  assert.equal(body.total, 1);
+  assert.equal(body.items[0].subscribed, true, "the flag beside the answers was ignored");
+});
+
+await check("subscribing creates the row", async () => {
+  const { status } = await call("POST", "/api/subscribe", {
+    body: { email: PERSON },
+  });
+  assert.equal(status, 201);
+
+  const { body } = await call("GET", `/api/admin/audience?q=${PERSON}`, { token });
+  assert.equal(body.total, 1);
+  assert.equal(body.items[0].subscribed, true);
+  assert.deepEqual(body.items[0].sources, ["subscribe"]);
+  assert.equal(body.items[0].name, "");
+});
+
+await check("contacting FILLS the blanks and adds a source", async () => {
+  const { status } = await call("POST", "/api/contact", {
+    body: {
+      email: PERSON,
+      name: "Aisha Rahman",
+      subject: "About the fishing trip",
+      mobile: "+91 90000 00000",
+      message: "Is there parking?",
+    },
+  });
+  assert.equal(status, 201);
+
+  const { body } = await call("GET", `/api/admin/audience?q=${PERSON}`, { token });
+  assert.equal(body.total, 1, "a second row was created for the same email");
+  const row = body.items[0];
+  assert.equal(row.name, "Aisha Rahman");
+  assert.equal(row.mobile, "+91 90000 00000");
+  assert.deepEqual(row.sources.sort(), ["contact", "subscribe"]);
+  assert.equal(row.messages.length, 1);
+  assert.equal(row.messages[0].subject, "About the fishing trip");
+});
+
+await check("⚠ a later form NEVER overwrites a stored name", async () => {
+  await call("POST", "/api/contact", {
+    body: { email: PERSON, name: "aisha", subject: "again", mobile: "+91 1" },
+  });
+
+  const { body } = await call("GET", `/api/admin/audience?q=${PERSON}`, { token });
+  const row = body.items[0];
+  assert.equal(row.name, "Aisha Rahman", "a hurried name replaced a good one");
+  assert.equal(row.mobile, "+91 90000 00000", "a hurried number replaced a good one");
+  assert.equal(row.messages.length, 2, "the second message was not kept");
+});
+
+await check("⚠ an unticked box does not UNSUBSCRIBE someone", async () => {
+  await call("POST", "/api/contact", {
+    body: { email: PERSON, name: "x", subject: "x", subscribe: false },
+  });
+  const { body } = await call("GET", `/api/admin/audience?q=${PERSON}`, { token });
+  assert.equal(body.items[0].subscribed, true);
+});
+
+await check("the CMS can unsubscribe someone deliberately", async () => {
+  const { body: list } = await call("GET", `/api/admin/audience?q=${PERSON}`, { token });
+  const { status, body } = await call(
+    "PATCH",
+    `/api/admin/audience/${list.items[0].id}`,
+    {
+      token,
+      body: { subscribed: false },
+    }
+  );
+  assert.equal(status, 200);
+  assert.equal(body.subscribed, false);
+
+  /* And subscribing again turns it back on. */
+  await call("POST", "/api/subscribe", { body: { email: PERSON } });
+  const { body: after } = await call("GET", `/api/admin/audience?q=${PERSON}`, { token });
+  assert.equal(after.items[0].subscribed, true);
+});
+
+await check(
+  "a volunteer application writes BOTH the person and the application",
+  async () => {
+    const { status } = await call("POST", "/api/volunteer?country=ca", {
+      body: {
+        email: "vol@example.com",
+        name: "Sam Volunteer",
+        mobile: "+1 416 555 0000",
+        availability: "Weekends",
+        about: "Happy to help with the food drive.",
+      },
+    });
+    assert.equal(status, 201);
+
+    const audience = await call("GET", "/api/admin/audience?q=vol@example.com", {
+      token,
+    });
+    assert.equal(audience.body.total, 1);
+    assert.deepEqual(audience.body.items[0].sources, ["volunteer"]);
+
+    const apps = await call("GET", "/api/admin/applications?kind=volunteer", { token });
+    const app = apps.body.items.find((a) => a.email === "vol@example.com");
+    assert.ok(app, "the application was not stored");
+    assert.equal(app.country, "ca");
+    const labels = app.answers.map((a) => a.label);
+    assert.ok(labels.includes("Availability"), `answers were not snapshotted: ${labels}`);
+    /* ⚠ A question left blank is still recorded, so the CMS can tell it from
+       one this kind never asks. */
+    assert.ok(
+      !labels.includes("Experience"),
+      "a volunteer carried a question only the career form asks"
+    );
+  }
+);
+
+await check("a career application is filed under its own kind", async () => {
+  const { status } = await call("POST", "/api/career", {
+    body: {
+      email: "dev@example.com",
+      name: "Dev Person",
+      mobile: "+91 2",
+      role: "Frontend developer",
+      about: "Six years of React.",
+      portfolio: "https://example.com/me",
+    },
+  });
+  assert.equal(status, 201);
+
+  const { body } = await call("GET", "/api/admin/applications?kind=career", { token });
+  const app = body.items.find((a) => a.email === "dev@example.com");
+  assert.ok(app);
+  assert.equal(app.role, "Frontend developer");
+
+  /* Experience was not filled in, and is still on the row as an empty answer. */
+  const experience = app.answers.find((a) => a.label === "Experience");
+  assert.ok(experience, "a blank answer was dropped instead of recorded");
+  assert.equal(experience.value, "");
+
+  /* ⚠ The kind filter has to actually narrow, or the second CMS tab is the
+     first one wearing a different heading. */
+  const volunteers = await call("GET", "/api/admin/applications?kind=volunteer", {
+    token,
+  });
+  assert.ok(!volunteers.body.items.some((a) => a.email === "dev@example.com"));
+});
+
+await check("⚠ a career application with NO email is refused", async () => {
+  const { status } = await call("POST", "/api/career", {
+    body: { name: "No Email", mobile: "+91 3", role: "x", about: "x" },
+  });
+  assert.equal(status, 400);
+});
+
+await check("the audience exports as a spreadsheet", async () => {
+  const res = await fetch(`${base}/api/admin/audience/export`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(res.status, 200);
+  const csv = await res.text();
+  assert.match(csv, /aisha@example\.com/);
+  assert.match(csv.split("\r\n")[0], /subscribed/i);
+});
+
+await check("stats count people per form", async () => {
+  const { body } = await call("GET", "/api/admin/audience/stats", { token });
+  assert.ok(body.total >= 3, `expected at least 3 people, got ${body.total}`);
+  assert.ok(body.sources.subscribe >= 1);
+  assert.ok(body.sources.volunteer >= 1);
+});
+
+await check("⚠ a viewer cannot write the audience", async () => {
+  const { body: list } = await call("GET", "/api/admin/audience", { token: viewerToken });
+  assert.equal(list.total >= 1, true, "a viewer could not READ the audience");
+  const { status } = await call("PATCH", `/api/admin/audience/${list.items[0].id}`, {
+    token: viewerToken,
+    body: { note: "nope" },
+  });
+  assert.equal(status, 403);
 });
 
 console.log("\nthe one call the site makes");

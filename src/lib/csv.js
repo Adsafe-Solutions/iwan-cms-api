@@ -1,5 +1,9 @@
-/* Registrations as a spreadsheet. Hand-written rather than a dependency: the
-   interesting part is not the escaping but deciding what the columns ARE. */
+/* Rows as a spreadsheet. Hand-written rather than a dependency: the interesting
+   part is not the escaping but deciding what the columns ARE.
+
+   `toCsv` is the registrations one, whose columns come from the answers. `rowsToCsv`
+   below is the plain case — a fixed list of columns, for the audience and the
+   applications. */
 
 /* ⚠ The whole of RFC 4180: quote on comma, quote or newline, and double an
    inner quote. Without it "Yes, but only on Saturday" becomes two columns and
@@ -77,6 +81,19 @@ export function toCsv(rows = []) {
   /* ⚠ Without the BOM, Excel on Windows reads UTF-8 as the local codepage and
      mangles every accented name. */
   return `﻿${lines.join("\r\n")}\r\n`;
+}
+
+/* A fixed set of columns, given as [key, header] pairs. Anything a cell cannot
+   render flat — a list of messages, say — is the caller's job to reduce first. */
+export function rowsToCsv(rows = [], columns = []) {
+  if (columns.length === 0) return "";
+
+  const lines = [columns.map(([, header]) => safe(header)).join(",")];
+  for (const row of rows) {
+    lines.push(columns.map(([key]) => safe(row[key])).join(","));
+  }
+
+  return `\ufeff${lines.join("\r\n")}\r\n`;
 }
 
 export default toCsv;
