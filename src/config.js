@@ -17,6 +17,20 @@ export const CONFIG = {
   jwtSecret: process.env.JWT_SECRET ?? "",
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   corsOrigins: list(process.env.CORS_ORIGINS),
+
+  /* Transactional mail — see lib/mail.js.
+     ⚠ UNSET IS THE SWITCHED-OFF STATE. Without a key nothing is sent and
+     registration behaves exactly as it did before confirmations existed, so a
+     deployment that has not been given one still takes sign-ups. */
+  resendApiKey: process.env.RESEND_API_KEY ?? "",
+  /* The From address. Resend requires its domain to be verified in the Resend
+     dashboard first — until then only `onboarding@resend.dev` will send, and
+     only to the address that owns the Resend account. */
+  mailFrom: process.env.MAIL_FROM ?? "",
+  mailReplyTo: process.env.MAIL_REPLY_TO ?? "",
+  /* Used to build the event link inside the confirmation. Optional: with no
+     site URL the mail simply omits the link. */
+  siteUrl: process.env.SITE_URL ?? "",
 };
 
 export const isProduction = CONFIG.env === "production";
@@ -43,6 +57,14 @@ export function assertConfig() {
 
   if (isProduction && CONFIG.corsOrigins.length === 0) {
     problems.push("CORS_ORIGINS is empty — no browser origin could reach this API");
+  }
+
+  /* ⚠ Half-configured mail is the one state worth refusing, in any environment:
+     a key with no From address means every send fails at the point where
+     someone has just been told their place is booked. Neither being set is
+     fine — that is mail switched off. */
+  if (CONFIG.resendApiKey && !CONFIG.mailFrom) {
+    problems.push("RESEND_API_KEY is set but MAIL_FROM is not — mail cannot send");
   }
 
   if (problems.length) {

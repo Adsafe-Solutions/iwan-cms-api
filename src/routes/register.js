@@ -5,6 +5,7 @@ import { Registration } from "../models/Registration.js";
 import { badRequest, notFound, wrap } from "../lib/errors.js";
 import { COUNTRY_CODES, countryQuery, isCountryCode } from "../lib/countries.js";
 import { buildAnswers, summarise } from "../validators/registration.js";
+import { sendRegistrationConfirmation } from "../lib/mail.js";
 
 /* The one route on this API that the public can WRITE to.
 
@@ -121,6 +122,14 @@ router.post(
       id: String(registration._id),
       event: { slug: event.slug, title: event.title },
     });
+
+    /* ⚠ AFTER the response, and deliberately not awaited. The place is already
+       booked; making the caller wait on an external mail API would add its
+       latency to every sign-up, and making the 201 depend on it would turn a
+       mail outage into an error the person retries — putting a second copy of
+       them in the database. sendRegistrationConfirmation never throws, so this
+       cannot reject into `wrap` and try to respond twice. */
+    void sendRegistrationConfirmation({ registration, event });
   })
 );
 
