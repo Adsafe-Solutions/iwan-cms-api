@@ -1,27 +1,21 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
+import { CONFIG } from "../config.js";
 import { Application } from "../models/Application.js";
-import { wrap } from "../lib/errors.js";
+import { badRequest, wrap } from "../lib/errors.js";
 import { validate } from "../middleware/validate.js";
 import { recordAudience } from "../lib/audience.js";
 import { COUNTRY_CODES, isCountryCode } from "../lib/countries.js";
-import {
-  answersFrom,
-  careerInput,
-  contactInput,
-  subscribeInput,
-  volunteerInput,
-  CAREER_QUESTIONS,
-  VOLUNTEER_QUESTIONS,
-} from "../validators/forms.js";
+import { buildAnswers, summarise } from "../validators/registration.js";
+import { contactInput, subscribeInput } from "../validators/forms.js";
+import { resolveApplyForm } from "../lib/applyForms.js";
 
 /* The public forms: subscribe, contact, volunteer and career. Event sign-ups
-   are next door in register.js, which has its own per-event validation.
+   are next door in register.js.
 
    ⚠ Every one of these is a write anyone on the internet can make, so they all
    share the limits below and all answer the same thin `{ ok: true }` — a form
-   that echoes back what it stored is a form that tells a prober what it
-   stored. */
+   that echoes back what it stored tells a prober what it stored. */
 
 const router = Router();
 
@@ -31,7 +25,7 @@ const router = Router();
    Both limits need `trust proxy` on the app — see app.js. */
 const writeLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  limit: 8,
+  limit: CONFIG.formWriteLimit,
   skipFailedRequests: true,
   standardHeaders: "draft-7",
   legacyHeaders: false,
@@ -40,7 +34,7 @@ const writeLimiter = rateLimit({
 
 const attemptLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  limit: 40,
+  limit: CONFIG.formAttemptLimit,
   standardHeaders: "draft-7",
   legacyHeaders: false,
   message: { error: "Too many attempts. Try again in a few minutes." },
@@ -86,24 +80,52 @@ router.post(
   })
 );
 
-/* Volunteer and career differ only in their questions, so the route is built
-   once — a third kind is an entry here, not another handler. */
-const application = (kind, schema, questions) => [
+/* ── volunteer and career ───────────────────────────────────────────────── */
+
+/* ⚠ Validated against the form the CMS holds, not a fixed schema — the same
+   contract as an event's registration. The questions are content now, so a key
+   the form does not define is dropped rather than stored, and a choice answer
+   that is not one of the offered options is refused.
+
+   The built-in list is the fallback for a deployment where nobody has opened
+   the CMS yet: without it these pages would refuse every submission until an
+   editor saved a form, which is a worse first day than a sensible default. */
+const application = (kind) => [
   attemptLimiter,
   writeLimiter,
-  validate(schema),
   wrap(async (req, res) => {
     const country = askedCountry(req);
-    const { email, name, mobile, role, subscribe } = req.body;
 
-    /* ⚠ The audience row first, so the application can point at it. A person
-       who applies is reachable from the one list even if the application is
-       later deleted. */
+    /* ⚠ The SAME resolution the site rendered from, so a submission is checked
+       against the questions the visitor was actually shown. */
+    const form = await resolveApplyForm(kind, country);
+    if (!form) {
+      throw badRequest("This form is not accepting applications right now");
+    }
+    const { fields } = form;
+
+    const answers = buildAnswers(fields, req.body?.answers ?? req.body ?? {});
+    const { name, email, mobile } = summarise(answers);
+
+    /* ⚠ Guarded here as well as in the CMS. assertApplyFormIsSound refuses to
+       SAVE a form with no email question, but a form stored before that rule
+       existed would otherwise land an application nobody can answer. */
+    if (!email) {
+      throw badRequest("An email address is required", [
+        { field: "form", message: "This form is missing its email question." },
+      ]);
+    }
+
+    /* The role, where the form asks for one. Read by key rather than position
+       so an editor can move it, and simply absent when they do not ask. */
+    const role = String(answers.find((a) => a.key === "role")?.value ?? "").slice(0, 200);
+
+    /* The audience row first, so the application can point at it. */
     const person = await recordAudience({
       email,
       name,
       mobile,
-      subscribe,
+      subscribe: typeof req.body?.subscribe === "boolean" ? req.body.subscribe : false,
       source: kind,
       country,
     });
@@ -116,17 +138,14 @@ const application = (kind, schema, questions) => [
       role,
       country,
       audience: person?._id,
-      answers: answersFrom(req.body, questions),
+      answers,
     });
 
     ok(res);
   }),
 ];
 
-router.post(
-  "/volunteer",
-  ...application("volunteer", volunteerInput, VOLUNTEER_QUESTIONS)
-);
-router.post("/career", ...application("career", careerInput, CAREER_QUESTIONS));
+router.post("/volunteer", ...application("volunteer"));
+router.post("/career", ...application("career"));
 
 export default router;

@@ -209,7 +209,6 @@ export const adminShow = (doc) => ({
   title: doc?.title ?? "",
   description: doc?.description ?? "",
   cover: doc?.cover ?? "",
-  updatedAt: doc?.updatedAt ?? null,
 });
 
 export const adminPromo = (doc) => ({
@@ -251,6 +250,61 @@ export const adminRegistration = (doc) => ({
   })),
   submittedAt: doc.createdAt,
   updatedAt: doc.updatedAt,
+});
+
+/* The builder needs the stored shape, options as objects and all — same as an
+   event's form. */
+const APPLY_COPY = [
+  "eyebrow",
+  "heading",
+  "mark",
+  "intro",
+  "formHeading",
+  "submitLabel",
+  "subscribeLabel",
+  "doneHeading",
+  "doneBody",
+];
+
+export const adminApplyForm = (doc) => ({
+  id: String(doc._id),
+  kind: doc.kind,
+  name: doc.name,
+  countries: doc.countries ?? [],
+  active: Boolean(doc.active),
+  isDefault: Boolean(doc.isDefault),
+  updatedAt: doc.updatedAt,
+  ...Object.fromEntries(APPLY_COPY.map((key) => [key, doc?.[key] ?? ""])),
+  fields: (doc.fields ?? []).map((f) => ({
+    key: f.key,
+    type: f.type,
+    label: f.label,
+    help: f.help ?? "",
+    placeholder: f.placeholder ?? "",
+    required: Boolean(f.required),
+    options: (f.options ?? []).map((o) => ({ label: o.label })),
+  })),
+  updatedAt: doc?.updatedAt ?? null,
+});
+
+/* ⚠ No Mongo bookkeeping — just what a renderer needs to draw the question and
+   validate the answer. Same contract as publicEvent's `form`. */
+/* ⚠ The ACTIVE form, verbatim. No merging with anything the site ships: what
+   the CMS holds is what the page renders, so an editor can see the page in the
+   builder rather than guessing which half wins. Null when nothing is active —
+   see lib/applyForms.js. */
+export const publicApplyForm = (resolved) => ({
+  kind: resolved.kind,
+  ...Object.fromEntries(APPLY_COPY.map((key) => [key, resolved[key] ?? ""])),
+  fields: (resolved.fields ?? []).map((f) => ({
+    key: f.key,
+    type: f.type,
+    label: f.label,
+    ...(f.help ? { help: f.help } : {}),
+    ...(f.placeholder ? { placeholder: f.placeholder } : {}),
+    ...(f.required ? { required: true } : {}),
+    ...(f.options?.length ? { options: f.options.map((o) => o.label) } : {}),
+  })),
 });
 
 export const adminAudience = (doc) => ({

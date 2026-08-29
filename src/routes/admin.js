@@ -6,6 +6,9 @@ import { Event } from "../models/Event.js";
 import { Blog } from "../models/Blog.js";
 import { PodcastEpisode, PodcastShow } from "../models/Podcast.js";
 import { Promo } from "../models/Promo.js";
+import { ApplyForm } from "../models/ApplyForm.js";
+import { activateApplyForm } from "../lib/applyForms.js";
+import { APPLICATION_KINDS } from "../models/Application.js";
 import { User } from "../models/User.js";
 import {
   adminBlog,
@@ -13,10 +16,13 @@ import {
   adminEvent,
   adminPromo,
   adminShow,
+  adminApplyForm,
   adminUser,
 } from "../lib/serialize.js";
 import {
   assertEpisodePlayable,
+  applyFormInput,
+  assertApplyFormIsSound,
   assertEventIsSound,
   assertPromoWindow,
   blogInput,
@@ -139,6 +145,121 @@ router
       res.json(adminShow(show));
     })
   );
+
+/* The volunteer and career question sets. Two singletons keyed by kind, so
+   GET/PUT rather than a CRUD router — the same shape as the podcast show. */
+/* The volunteer and career forms. A list, so this is ordinary CRUD plus one
+   extra verb: activating. */
+router.get(
+  "/apply-forms",
+  wrap(async (req, res) => {
+    const where = APPLICATION_KINDS.includes(req.query.kind)
+      ? { kind: req.query.kind }
+      : {};
+    const items = await ApplyForm.find(where).sort({ kind: 1, updatedAt: -1 }).lean();
+    res.json({ items: items.map(adminApplyForm), total: items.length });
+  })
+);
+
+router.post(
+  "/apply-forms",
+  validate(applyFormInput),
+  wrap(async (req, res) => {
+    assertApplyFormIsSound(req.body);
+    const doc = await ApplyForm.create(req.body);
+    res.status(201).json(adminApplyForm(doc.toObject()));
+  })
+);
+
+router.get(
+  "/apply-forms/:id",
+  wrap(async (req, res) => {
+    const doc = await ApplyForm.findById(req.params.id).lean();
+    if (!doc) throw notFound("No such form");
+    res.json(adminApplyForm(doc));
+  })
+);
+
+router.put(
+  "/apply-forms/:id",
+  validate(applyFormInput),
+  wrap(async (req, res) => {
+    assertApplyFormIsSound(req.body);
+
+    const doc = await ApplyForm.findById(req.params.id);
+    if (!doc) throw notFound("No such form");
+
+    doc.set(req.body);
+    await doc.save();
+
+    /* ⚠ Re-run if this one is live: editing its countries can put it back in
+       competition with another active form, and two live forms make "which one
+       does Canada see" unanswerable. */
+    if (doc.active) await activateApplyForm(doc);
+
+    res.json(adminApplyForm(doc.toObject()));
+  })
+);
+
+/* ⚠ The one that enforces "one active at a time". Deactivating the others is
+   part of activating THIS one, not a separate call an editor could forget. */
+router.post(
+  "/apply-forms/:id/activate",
+  wrap(async (req, res) => {
+    const doc = await ApplyForm.findById(req.params.id).lean();
+    if (!doc) throw notFound("No such form");
+
+    if (!(doc.fields ?? []).length) {
+      throw badRequest("A form with no questions cannot go live", [
+        { field: "fields", message: "Add at least one question first." },
+      ]);
+    }
+    assertApplyFormIsSound(doc);
+
+    const displaced = await activateApplyForm(doc);
+    const fresh = await ApplyForm.findById(req.params.id).lean();
+    res.json({ ...adminApplyForm(fresh), displaced });
+  })
+);
+
+router.post(
+  "/apply-forms/:id/deactivate",
+  wrap(async (req, res) => {
+    const doc = await ApplyForm.findByIdAndUpdate(
+      req.params.id,
+      { $set: { active: false } },
+      { new: true }
+    ).lean();
+    if (!doc) throw notFound("No such form");
+    res.json(adminApplyForm(doc));
+  })
+);
+
+router.delete(
+  "/apply-forms/:id",
+  wrap(async (req, res) => {
+    const doc = await ApplyForm.findById(req.params.id);
+    if (!doc) throw notFound("No such form");
+
+    /* ⚠ Refused while live, or the page loses its form to a click meant as
+       tidying up. Deactivate first, which is a deliberate second step. */
+    if (doc.active) {
+      throw badRequest("This form is live — turn it off before deleting it");
+    }
+
+    /* ⚠ The default is the floor under everything else: delete it and a
+       deployment with no custom form has nothing at all. Turning it off is
+       allowed — that is a deliberate "we are not taking applications". */
+    if (doc.isDefault) {
+      throw badRequest(
+        "This is the default form and cannot be deleted. Turn it off instead."
+      );
+    }
+
+    await doc.deleteOne();
+    res.status(204).end();
+  })
+);
 
 router.use("/registrations", registrationRoutes);
 router.use("/audience", audienceRoutes);

@@ -13,6 +13,7 @@ import { access } from "node:fs/promises";
 import { Event } from "../src/models/Event.js";
 import { Blog } from "../src/models/Blog.js";
 import { PodcastEpisode, PodcastShow } from "../src/models/Podcast.js";
+import { ensureDefaultApplyForms } from "../src/lib/applyForms.js";
 import { Promo } from "../src/models/Promo.js";
 import { blocksToHtml } from "../src/lib/html.js";
 
@@ -251,6 +252,11 @@ export async function seedInto({
     episodes: await upsertAll(PodcastEpisode, podcastModule.episodes),
     promos: await upsertAll(Promo, promoModule),
   };
+
+  /* ⚠ Not gated on `only`, and not affected by --reset. These are not a copy of
+     anything in the static files — they are the starting forms an editor then
+     owns, and re-seeding content has no business touching them. */
+  counts.applyForms = (await ensureDefaultApplyForms()).length;
 
   if (podcastModule.show) {
     await PodcastShow.findOneAndUpdate({ key: "show" }, podcastModule.show, {

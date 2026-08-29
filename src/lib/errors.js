@@ -18,9 +18,6 @@ export const forbidden = (message = "Not allowed") => new HttpError(403, message
 
 export const notFound = (message = "Not found") => new HttpError(404, message);
 
-export const conflict = (message = "Already exists", details) =>
-  new HttpError(409, message, details);
-
 /* ⚠ Express 4 does not forward a rejected promise from an async handler — it
    hangs the request. Every async route is wrapped so errors reach the
    handler. */

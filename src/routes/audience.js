@@ -6,7 +6,7 @@ import { notFound, wrap } from "../lib/errors.js";
 import { validate } from "../middleware/validate.js";
 import { isCountryCode } from "../lib/countries.js";
 import { adminApplication, adminAudience } from "../lib/serialize.js";
-import { rowsToCsv, toCsv } from "../lib/csv.js";
+import { rowsToCsv } from "../lib/csv.js";
 
 /* Reading the audience list and the applications. Mounted under /api/admin, so
    already behind a sign-in and the read-only guard. */

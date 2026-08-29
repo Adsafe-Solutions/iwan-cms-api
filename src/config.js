@@ -27,6 +27,13 @@ export const CONFIG = {
   mailReplyTo: process.env.MAIL_REPLY_TO ?? "",
   /* Builds the event link in the confirmation. Optional — the mail omits it. */
   siteUrl: process.env.SITE_URL ?? "",
+
+  /* How many public form submissions one address may make per ten minutes.
+     ⚠ Shared across subscribe, contact, volunteer and career — the limit is on
+     the person, not the form. Configurable so the smoke suite can raise it and
+     still run the middleware, rather than skipping it and testing nothing. */
+  formWriteLimit: Number(process.env.FORM_WRITE_LIMIT ?? 8),
+  formAttemptLimit: Number(process.env.FORM_ATTEMPT_LIMIT ?? 40),
 };
 
 export const isProduction = CONFIG.env === "production";

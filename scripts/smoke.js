@@ -26,6 +26,13 @@ process.env.NODE_ENV = "test";
 process.env.JWT_SECRET = "smoke-test-secret-that-is-long-enough-to-pass";
 process.env.CORS_ORIGINS = "";
 
+/* ⚠ Raised, not disabled. The limiter still runs on every submission below —
+   its store, its key and its headers — but a suite that posts a few dozen
+   forms from one address would otherwise spend most of its run being told to
+   come back in ten minutes. */
+process.env.FORM_WRITE_LIMIT = "1000";
+process.env.FORM_ATTEMPT_LIMIT = "5000";
+
 /* ⚠ EMPTIED, not left to the environment, and not for tidiness: config.js loads
    .env, so a developer with a real RESEND_API_KEY had this suite making LIVE
    Resend calls on every run. They bounced only because the fixtures use
@@ -1335,6 +1342,326 @@ await check("⚠ an admin cannot demote ITSELF to viewer", async () => {
   assert.match(err.error, /own admin role/i);
 });
 
+console.log("\napplication forms");
+
+/* A list of forms per kind, one live at a time. The site renders the live one
+   verbatim — there is no static copy underneath it to fall back to. */
+
+const NAME_FIELD = { key: "name", type: "name", label: "Your name", required: true };
+const EMAIL_FIELD = { key: "email", type: "email", label: "Your email", required: true };
+const MOBILE_FIELD = { key: "mobile", type: "phone", label: "Mobile", required: true };
+
+let volunteerFormId = null;
+let secondFormId = null;
+
+await check("an editor can create a form, and it is NOT live yet", async () => {
+  const { status, body } = await call("POST", "/api/admin/apply-forms", {
+    token,
+    body: {
+      kind: "volunteer",
+      name: "Volunteer form",
+      countries: [],
+      eyebrow: "Volunteer",
+      heading: "Give some time to",
+      mark: "Iwan",
+      intro: "Our programmes run on people who turn up.",
+      formHeading: "Tell us about you",
+      submitLabel: "Send my details",
+      subscribeLabel: "Keep me posted",
+      doneHeading: "Thank you",
+      doneBody: "We have your details.",
+      fields: [
+        NAME_FIELD,
+        EMAIL_FIELD,
+        MOBILE_FIELD,
+        { key: "role", type: "text", label: "What would you like to help with" },
+        { key: "availability", type: "text", label: "When you are free" },
+        { key: "about", type: "textarea", label: "A little about you", required: true },
+      ],
+    },
+  });
+  assert.equal(status, 201);
+  assert.equal(body.active, false, "a new form went live on its own");
+  volunteerFormId = body.id;
+});
+
+await check(
+  "⚠ with nothing live, the page says so and submissions are refused",
+  async () => {
+    const page = await call("GET", "/api/apply-forms/volunteer?country=in");
+    assert.equal(page.body.active, false);
+    assert.ok(!page.body.fields, "a form was invented for a page with none live");
+
+    const posted = await call("POST", "/api/volunteer", {
+      body: { answers: { email: "early@example.com" } },
+    });
+    assert.equal(posted.status, 400);
+  }
+);
+
+await check("activating one makes it live", async () => {
+  const { status } = await call(
+    "POST",
+    `/api/admin/apply-forms/${volunteerFormId}/activate`,
+    {
+      token,
+    }
+  );
+  assert.equal(status, 200);
+
+  const { body } = await call("GET", "/api/apply-forms/volunteer?country=in");
+  assert.equal(body.heading, "Give some time to");
+  assert.ok(body.fields.some((f) => f.key === "availability"));
+});
+
+await check("⚠ the site is served the CMS copy VERBATIM", async () => {
+  /* The whole point of "what the CMS has is what the page shows" — every word
+     comes from the record, with nothing merged in underneath. */
+  const { body } = await call("GET", "/api/apply-forms/volunteer?country=in");
+  assert.equal(body.eyebrow, "Volunteer");
+  assert.equal(body.mark, "Iwan");
+  assert.equal(body.submitLabel, "Send my details");
+  assert.equal(body.doneBody, "We have your details.");
+});
+
+await check("⚠ activating a second form turns the first OFF", async () => {
+  const made = await call("POST", "/api/admin/apply-forms", {
+    token,
+    body: {
+      kind: "volunteer",
+      name: "Volunteer form v2",
+      countries: [],
+      heading: "Second form",
+      fields: [EMAIL_FIELD, { key: "why", type: "textarea", label: "Why volunteer" }],
+    },
+  });
+  secondFormId = made.body.id;
+
+  const { body } = await call("POST", `/api/admin/apply-forms/${secondFormId}/activate`, {
+    token,
+  });
+  assert.equal(body.displaced, 1, "the first form was left live alongside the second");
+
+  const list = await call("GET", "/api/admin/apply-forms?kind=volunteer", { token });
+  const live = list.body.items.filter((f) => f.active);
+  assert.equal(live.length, 1, `${live.length} forms are live at once`);
+  assert.equal(live[0].id, secondFormId);
+});
+
+await check("a country form beats the global one", async () => {
+  const made = await call("POST", "/api/admin/apply-forms", {
+    token,
+    body: {
+      kind: "volunteer",
+      name: "Volunteer form — Canada",
+      countries: ["ca"],
+      heading: "Volunteer in",
+      mark: "Canada",
+      fields: [EMAIL_FIELD, { key: "city", type: "text", label: "Which city" }],
+    },
+  });
+  await call("POST", `/api/admin/apply-forms/${made.body.id}/activate`, { token });
+
+  const ca = await call("GET", "/api/apply-forms/volunteer?country=ca");
+  assert.equal(ca.body.heading, "Volunteer in");
+
+  /* ⚠ And the global one is still live for everywhere else — a Canada-only
+     form does not displace it. */
+  const inn = await call("GET", "/api/apply-forms/volunteer?country=in");
+  assert.equal(inn.body.heading, "Second form");
+});
+
+await check("⚠ a form with no questions cannot go live", async () => {
+  const made = await call("POST", "/api/admin/apply-forms", {
+    token,
+    body: { kind: "career", name: "Empty", countries: [], fields: [] },
+  });
+  assert.equal(made.status, 201, "an empty form should still be saveable as a draft");
+
+  const { status, body } = await call(
+    "POST",
+    `/api/admin/apply-forms/${made.body.id}/activate`,
+    { token }
+  );
+  assert.equal(status, 400);
+  assert.match(body.error, /no questions/i);
+});
+
+await check("⚠ a form with questions but no EMAIL is refused", async () => {
+  const { status, body } = await call("POST", "/api/admin/apply-forms", {
+    token,
+    body: {
+      kind: "career",
+      name: "No email",
+      countries: [],
+      fields: [{ key: "name", type: "text", label: "Your name" }],
+    },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error, /email/i);
+});
+
+await check("⚠ a LIVE form cannot be deleted", async () => {
+  const { status } = await call("DELETE", `/api/admin/apply-forms/${secondFormId}`, {
+    token,
+  });
+  assert.equal(status, 400);
+
+  /* Turning it off first is the deliberate second step. */
+  await call("POST", `/api/admin/apply-forms/${secondFormId}/deactivate`, { token });
+  const again = await call("DELETE", `/api/admin/apply-forms/${secondFormId}`, { token });
+  assert.equal(again.status, 204);
+});
+
+await check("the first form can be put back", async () => {
+  const { status } = await call(
+    "POST",
+    `/api/admin/apply-forms/${volunteerFormId}/activate`,
+    {
+      token,
+    }
+  );
+  assert.equal(status, 200);
+  const { body } = await call("GET", "/api/apply-forms/volunteer?country=in");
+  assert.equal(body.heading, "Give some time to");
+});
+
+await check("a career form is live too", async () => {
+  const made = await call("POST", "/api/admin/apply-forms", {
+    token,
+    body: {
+      kind: "career",
+      name: "Career form",
+      countries: [],
+      heading: "Build something with",
+      mark: "Iwan",
+      doneHeading: "Thank you",
+      fields: [
+        NAME_FIELD,
+        EMAIL_FIELD,
+        MOBILE_FIELD,
+        { key: "role", type: "text", label: "Role", required: true },
+        { key: "experience", type: "text", label: "Years of experience" },
+        { key: "portfolio", type: "text", label: "Portfolio" },
+        {
+          key: "about",
+          type: "textarea",
+          label: "About your experience",
+          required: true,
+        },
+      ],
+    },
+  });
+  const { status } = await call(
+    "POST",
+    `/api/admin/apply-forms/${made.body.id}/activate`,
+    {
+      token,
+    }
+  );
+  assert.equal(status, 200);
+});
+
+await check("⚠ the API creates its default forms on boot, and only once", async () => {
+  /* server.js calls this after connecting. The suite boots the app directly, so
+     it calls the same function — the point is that it is idempotent and never
+     displaces a live form. */
+  const { ensureDefaultApplyForms } = await import("../src/lib/applyForms.js");
+  const { ApplyForm } = await import("../src/models/ApplyForm.js");
+
+  const first = await ensureDefaultApplyForms();
+  assert.deepEqual(first.sort(), ["career", "volunteer"]);
+
+  /* ⚠ A volunteer form is already live from the checks above, so the default
+     must arrive switched OFF rather than taking the page over. */
+  const volunteerDefault = await ApplyForm.findOne({
+    kind: "volunteer",
+    isDefault: true,
+  }).lean();
+  assert.equal(volunteerDefault.active, false, "the default displaced a live form");
+
+  /* Career had nothing live, so its default is on. */
+  const careerDefault = await ApplyForm.findOne({
+    kind: "career",
+    isDefault: true,
+  }).lean();
+  assert.ok(careerDefault, "no career default was created");
+
+  /* Running it again changes nothing. */
+  const second = await ensureDefaultApplyForms();
+  assert.deepEqual(second, [], "a restart created a second default");
+  assert.equal(await ApplyForm.countDocuments({ isDefault: true }), 2);
+});
+
+await check("⚠ the DEFAULT form cannot be deleted, only turned off", async () => {
+  /* Seeded rather than created here, so the suite makes one the same way the
+     seed does — through the model, since the API deliberately offers no way to
+     mint a default. */
+  const { ApplyForm } = await import("../src/models/ApplyForm.js");
+  const made = await ApplyForm.create({
+    kind: "career",
+    name: "Default career form",
+    countries: [],
+    isDefault: true,
+    heading: "Build something that",
+    mark: "lasts.",
+    fields: [EMAIL_FIELD],
+  });
+
+  const { body: listed } = await call("GET", "/api/admin/apply-forms?kind=career", {
+    token,
+  });
+  assert.equal(
+    listed.items.find((f) => f.id === String(made._id)).isDefault,
+    true,
+    "the default flag is not serialised"
+  );
+
+  const deleted = await call("DELETE", `/api/admin/apply-forms/${made._id}`, { token });
+  assert.equal(deleted.status, 400);
+  assert.match(deleted.body.error, /default/i);
+
+  /* Turning it off is allowed — that is a deliberate "not taking applications". */
+  const off = await call("POST", `/api/admin/apply-forms/${made._id}/deactivate`, {
+    token,
+  });
+  assert.equal(off.status, 200);
+  assert.equal(off.body.active, false);
+
+  /* And it still cannot be deleted once off. */
+  const again = await call("DELETE", `/api/admin/apply-forms/${made._id}`, { token });
+  assert.equal(again.status, 400);
+});
+
+await check("⚠ a request cannot make itself the default", async () => {
+  const { body } = await call("POST", "/api/admin/apply-forms", {
+    token,
+    body: {
+      kind: "career",
+      name: "Pretender",
+      countries: [],
+      isDefault: true,
+      fields: [EMAIL_FIELD],
+    },
+  });
+  assert.equal(body.isDefault, false, "a form promoted itself to default");
+});
+
+await check("a viewer cannot create or activate a form", async () => {
+  const made = await call("POST", "/api/admin/apply-forms", {
+    token: viewerToken,
+    body: { kind: "career", name: "Nope", countries: [], fields: [EMAIL_FIELD] },
+  });
+  assert.equal(made.status, 403);
+
+  const activated = await call(
+    "POST",
+    `/api/admin/apply-forms/${volunteerFormId}/activate`,
+    { token: viewerToken }
+  );
+  assert.equal(activated.status, 403);
+});
+
 console.log("\nthe audience");
 
 /* Every public form funnels into one row per person, keyed on the email. The
@@ -1448,16 +1775,16 @@ await check("the CMS can unsubscribe someone deliberately", async () => {
 await check(
   "a volunteer application writes BOTH the person and the application",
   async () => {
+    /* ⚠ The same shape an event registration posts, keyed by the LIVE form's
+       own keys — and Canada has its own live form, so these are its questions
+       rather than the global one's. */
     const { status } = await call("POST", "/api/volunteer?country=ca", {
       body: {
-        email: "vol@example.com",
-        name: "Sam Volunteer",
-        mobile: "+1 416 555 0000",
-        availability: "Weekends",
-        about: "Happy to help with the food drive.",
+        answers: { email: "vol@example.com", city: "Toronto" },
+        subscribe: true,
       },
     });
-    assert.equal(status, 201);
+    assert.equal(status, 201, "the volunteer form refused a valid submission");
 
     const audience = await call("GET", "/api/admin/audience?q=vol@example.com", {
       token,
@@ -1469,12 +1796,12 @@ await check(
     const app = apps.body.items.find((a) => a.email === "vol@example.com");
     assert.ok(app, "the application was not stored");
     assert.equal(app.country, "ca");
-    const labels = app.answers.map((a) => a.label);
-    assert.ok(labels.includes("Availability"), `answers were not snapshotted: ${labels}`);
-    /* ⚠ A question left blank is still recorded, so the CMS can tell it from
-       one this kind never asks. */
+    /* ⚠ By KEY, not label — the labels are CMS content and an editor may
+       reword them, which is exactly what a test must not break on. */
+    const keys = app.answers.map((a) => a.key);
+    assert.ok(keys.includes("city"), `answers were not snapshotted: ${keys}`);
     assert.ok(
-      !labels.includes("Experience"),
+      !keys.includes("experience"),
       "a volunteer carried a question only the career form asks"
     );
   }
@@ -1483,25 +1810,34 @@ await check(
 await check("a career application is filed under its own kind", async () => {
   const { status } = await call("POST", "/api/career", {
     body: {
-      email: "dev@example.com",
-      name: "Dev Person",
-      mobile: "+91 2",
-      role: "Frontend developer",
-      about: "Six years of React.",
-      portfolio: "https://example.com/me",
+      answers: {
+        name: { first: "Dev", last: "Person" },
+        email: "dev@example.com",
+        mobile: "+91 2",
+        role: "Frontend developer",
+        about: "Six years of React.",
+        portfolio: "https://example.com/me",
+      },
     },
   });
-  assert.equal(status, 201);
+  assert.equal(status, 201, "the career form refused a valid submission");
 
   const { body } = await call("GET", "/api/admin/applications?kind=career", { token });
   const app = body.items.find((a) => a.email === "dev@example.com");
   assert.ok(app);
   assert.equal(app.role, "Frontend developer");
 
-  /* Experience was not filled in, and is still on the row as an empty answer. */
-  const experience = app.answers.find((a) => a.label === "Experience");
+  /* Experience was not filled in, and is still on the row as an empty answer —
+     which is what lets the CMS table tell it from a question never asked. */
+  const experience = app.answers.find((a) => a.key === "experience");
   assert.ok(experience, "a blank answer was dropped instead of recorded");
-  assert.equal(experience.value, "");
+  /* buildAnswers stores null for a text field nobody filled in; the CMS renders
+     null, undefined and "" identically as a dash. What matters is that the
+     question is on the row at all. */
+  assert.ok(
+    experience.value === null || experience.value === "",
+    `expected an empty answer, got ${JSON.stringify(experience.value)}`
+  );
 
   /* ⚠ The kind filter has to actually narrow, or the second CMS tab is the
      first one wearing a different heading. */

@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { COUNTRY_CODES } from "../lib/countries.js";
-import { BLOCK_KINDS } from "../models/Blog.js";
 
 /* Field-level validators shared by every content schema. These sit IN FRONT of
    Mongoose's validation rather than replacing it: Mongoose is the last line and
@@ -103,11 +102,6 @@ export const programme = z
 export const agendaRow = z.object({
   time: text(20),
   label: text(200),
-});
-
-export const bodyBlock = z.object({
-  kind: z.enum(BLOCK_KINDS),
-  text: longText(4000),
 });
 
 /* [lat, lng], or null. Validated as real coordinates rather than any two

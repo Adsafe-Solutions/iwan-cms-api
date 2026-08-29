@@ -1,6 +1,7 @@
 import { CONFIG, assertConfig } from "./config.js";
 import { connectDb, disconnectDb } from "./db.js";
 import { createApp } from "./app.js";
+import { ensureDefaultApplyForms } from "./lib/applyForms.js";
 
 /* ⚠ Boot order matters: config is checked before anything opens, and the
    database is connected before the port listens. A process accepting requests
@@ -10,6 +11,20 @@ async function main() {
 
   await connectDb();
   console.log(`[iwan-cms-api] connected to MongoDB (${CONFIG.env})`);
+
+  /* ⚠ Logged rather than thrown. A default form that could not be written is
+     worth shouting about, but it is not a reason to refuse to serve every other
+     route — the pages that depend on it say they are closed, which is honest. */
+  try {
+    const created = await ensureDefaultApplyForms();
+    if (created.length) {
+      console.log(
+        `[iwan-cms-api] created default application forms: ${created.join(", ")}`
+      );
+    }
+  } catch (err) {
+    console.error("[iwan-cms-api] could not ensure the default application forms:", err);
+  }
 
   const server = createApp().listen(CONFIG.port, () => {
     console.log(`[iwan-cms-api] listening on :${CONFIG.port}`);

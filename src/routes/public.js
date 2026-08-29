@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Event } from "../models/Event.js";
 import { Blog } from "../models/Blog.js";
 import { PodcastEpisode, PodcastShow } from "../models/Podcast.js";
+import { APPLICATION_KINDS } from "../models/Application.js";
+import { resolveApplyForm } from "../lib/applyForms.js";
 import { Promo } from "../models/Promo.js";
 import { notFound, wrap } from "../lib/errors.js";
 import { COUNTRY_CODES, countryQuery, isCountryCode } from "../lib/countries.js";
@@ -14,6 +16,7 @@ import {
   publicPromo,
   publicShow,
   publicShowMeta,
+  publicApplyForm,
 } from "../lib/serialize.js";
 
 /* The read-only half of the API. Three rules hold everywhere in this file:
@@ -188,6 +191,23 @@ router.get(
     const result = await listBlogs(req, askedCountry(req), 6);
     cacheable(res);
     res.json(result);
+  })
+);
+
+/* The questions the volunteer and career pages ask. Cacheable like the rest —
+   a form changes a few times a year, not a few times a second. */
+router.get(
+  "/apply-forms/:kind",
+  wrap(async (req, res) => {
+    const { kind } = req.params;
+    if (!APPLICATION_KINDS.includes(kind)) throw notFound("No such form");
+
+    /* ⚠ The ACTIVE form for this country, or null when an editor has none live.
+       The site then says it is not taking applications — it does not invent a
+       form, because what the CMS holds is what the page shows. */
+    const resolved = await resolveApplyForm(kind, askedCountry(req));
+    cacheable(res);
+    res.json(resolved ? publicApplyForm(resolved) : { kind, active: false });
   })
 );
 

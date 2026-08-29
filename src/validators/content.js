@@ -61,10 +61,6 @@ export const blogInput = z.object({
   img: f.url,
   excerpt: f.text(600),
 
-  /* ⚠ Sanitised here as well as by the model's setter, and not for its own
-     sake: doing it HERE means the length cap is measured on what will actually
-     be stored, so a payload padded with 100KB of `<script>` cannot slip under
-     the limit and then shrink. */
   html: z.string().max(500_000, "That post is too long").default("").transform(sanitize),
 });
 
@@ -165,6 +161,38 @@ export function assertEpisodePlayable(doc) {
   if (doc.audio && doc.video) {
     throw badRequest("An episode is either audio or video, not both", [
       { field: "audio", message: "Clear one of them — an episode plays one way." },
+    ]);
+  }
+}
+
+export const applyFormInput = z.object({
+  kind: z.enum(["volunteer", "career"]),
+  name: z.string().trim().min(1, "A name is required").max(120),
+  countries: f.countries,
+  eyebrow: f.text(80),
+  heading: f.text(160),
+  mark: f.text(80),
+  intro: f.longText(2000),
+  formHeading: f.text(120),
+  submitLabel: f.text(60),
+  subscribeLabel: f.text(200),
+  doneHeading: f.text(120),
+  doneBody: f.longText(600),
+  fields: formInput,
+});
+
+export function assertApplyFormIsSound(doc) {
+  const fields = doc.fields ?? [];
+  assertFormIsCoherent(fields);
+
+  /* ⚠ An EMPTY list is allowed and means "inherit" — a country overriding one
+     heading should not have to restate every question. The email rule applies
+     only once a form actually asks something. */
+  if (fields.length === 0) return;
+
+  if (!fields.some((field) => field.type === "email")) {
+    throw badRequest("An application form needs an email question", [
+      { field: "fields", message: "Add an Email question — replies depend on it." },
     ]);
   }
 }
