@@ -38,7 +38,24 @@ export const CONFIG = {
   /* Same idea for event registration, which carries its own tighter pair. */
   registerWriteLimit: Number(process.env.REGISTER_WRITE_LIMIT ?? 5),
   registerAttemptLimit: Number(process.env.REGISTER_ATTEMPT_LIMIT ?? 40),
+
+  /* Cloudflare R2, where uploaded images are stored. ⚠ ALL FIVE or NONE —
+     see assertConfig. With none set, uploading is switched off and the CMS
+     falls back to pasting a URL, which is how it worked before. */
+  r2: {
+    accountId: process.env.R2_ACCOUNT_ID ?? "",
+    accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? "",
+    bucket: process.env.R2_BUCKET ?? "",
+    /* The CUSTOM DOMAIN in front of the bucket, not the S3 endpoint — this is
+       what gets stored on the record and served to visitors. */
+    publicUrl: (process.env.R2_PUBLIC_URL ?? "").replace(/\/$/, ""),
+  },
 };
+
+/* Uploading needs every one of them; anything less is a misconfiguration
+   rather than a feature switch. */
+export const uploadsEnabled = () => Object.values(CONFIG.r2).every(Boolean);
 
 export const isProduction = CONFIG.env === "production";
 
@@ -70,6 +87,16 @@ export function assertConfig() {
      being set is fine — that is mail switched off. */
   if (CONFIG.resendApiKey && !CONFIG.mailFrom) {
     problems.push("RESEND_API_KEY is set but MAIL_FROM is not — mail cannot send");
+  }
+
+  /* ⚠ Same all-or-nothing rule as mail. A half-set R2 block would let the CMS
+     offer an Upload button that fails on every click. */
+  const r2Set = Object.entries(CONFIG.r2).filter(([, v]) => v);
+  if (r2Set.length && r2Set.length !== Object.keys(CONFIG.r2).length) {
+    const missing = Object.entries(CONFIG.r2)
+      .filter(([, v]) => !v)
+      .map(([k]) => `R2_${k.replace(/[A-Z]/g, (c) => `_${c}`).toUpperCase()}`);
+    problems.push(`R2 is half-configured — missing ${missing.join(", ")}`);
   }
 
   if (problems.length) {

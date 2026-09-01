@@ -45,6 +45,18 @@ process.env.REGISTER_ATTEMPT_LIMIT = "5000";
 process.env.RESEND_API_KEY = "";
 process.env.MAIL_FROM = "";
 
+/* ⚠ EMPTIED for the same reason, and it bit exactly the same way: config.js
+   loads .env, so a developer with real R2 credentials had this suite PUTting
+   a file into the production bucket on every run. Assigning "" rather than
+   deleting is what makes it stick — dotenv only fills in absent keys.
+   Uploading to R2 is covered by hand against the bucket; what runs here is
+   every guard in front of it. */
+process.env.R2_ACCOUNT_ID = "";
+process.env.R2_ACCESS_KEY_ID = "";
+process.env.R2_SECRET_ACCESS_KEY = "";
+process.env.R2_BUCKET = "";
+process.env.R2_PUBLIC_URL = "";
+
 const mongod = await MongoMemoryServer.create();
 process.env.MONGODB_URI = mongod.getUri("iwan_cms_smoke");
 
@@ -1839,6 +1851,81 @@ await check("a viewer cannot create or activate a form", async () => {
     { token: viewerToken }
   );
   assert.equal(activated.status, 403);
+});
+
+console.log("\nuploads");
+
+/* ⚠ R2 is NOT configured in this run (the env block at the top sets no R2_*
+   keys), so what is exercised here is everything up to the network call: the
+   sign-in, the writer guard, the size cap and the type checks. The PUT itself
+   and the resize are covered by hand against the real bucket — a smoke suite
+   that uploaded to production storage on every run would fill it with rubbish. */
+
+/* A one-pixel PNG, small enough to inline. */
+const PNG_1PX = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64"
+);
+
+const postFile = async (
+  buffer,
+  { name = "photo.png", type = "image/png", token: t } = {}
+) => {
+  const form = new FormData();
+  form.append("file", new Blob([buffer], { type }), name);
+  const res = await fetch(`${base}/api/admin/uploads`, {
+    method: "POST",
+    headers: t ? { authorization: `Bearer ${t}` } : {},
+    body: form,
+  });
+  return { status: res.status, body: await res.json().catch(() => null) };
+};
+
+await check("uploading needs a sign-in", async () => {
+  const { status } = await postFile(PNG_1PX);
+  assert.equal(status, 401);
+});
+
+await check("⚠ a viewer cannot upload", async () => {
+  /* The writer guard is keyed on the METHOD, so a POST is refused for a
+     read-only account without this route restating anything. */
+  const { status } = await postFile(PNG_1PX, { token: viewerToken });
+  assert.equal(status, 403);
+});
+
+await check("a request with no file is a 400, not a 500", async () => {
+  const res = await fetch(`${base}/api/admin/uploads`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: new FormData(),
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error, /no image/i);
+});
+
+await check("a file that is not an image is refused by type", async () => {
+  const { status, body } = await postFile(Buffer.from("%PDF-1.4 not an image"), {
+    name: "notes.pdf",
+    type: "application/pdf",
+    token,
+  });
+  assert.equal(status, 400, JSON.stringify(body));
+});
+
+await check("⚠ an oversized image is a 400 with a readable reason", async () => {
+  /* Multer reports LIMIT_FILE_SIZE through an error-first callback rather than
+     a rejected promise, so without the hand-rolled handler this was a 500. */
+  const huge = Buffer.alloc(11 * 1024 * 1024, 1);
+  const { status, body } = await postFile(huge, { token });
+  assert.equal(status, 400);
+  assert.match(JSON.stringify(body), /too large|MB/i);
+});
+
+await check("with R2 unset, uploading says so rather than half-working", async () => {
+  const { status, body } = await postFile(PNG_1PX, { token });
+  assert.equal(status, 400);
+  assert.match(body.error, /not configured/i);
 });
 
 console.log("\nthe audience");
