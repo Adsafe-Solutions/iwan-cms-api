@@ -112,7 +112,7 @@ const listBlogs = (req, code, fallbackLimit) =>
 const listEpisodes = (req, code, fallbackLimit) =>
   paged(
     PodcastEpisode,
-    published(code),
+    { ...published(code), ...programmeFilter(req) },
     { sort: { order: 1, createdAt: 1 }, ...paging(req, fallbackLimit) },
     publicEpisode
   );
@@ -235,6 +235,42 @@ router.get(
   })
 );
 
+/* Prev/next and "more like this" for a detail page, computed from the whole
+   ordered sibling list in card projection. One small find rather than a pair
+   of $lt/$gt queries: those must mirror a compound sort's tie-breakers exactly
+   or skip records, these collections hold dozens of documents, and the route
+   is edge-cached for a minute anyway. Prev/next follow the LIST's display
+   order — blogs newest-first, episodes by their running order. */
+const RELATED_LIMIT = 3;
+
+const around = (docs, index, serialize) => {
+  if (index < 0) {
+    /* The record exists but the sibling scan missed it (a race with an edit) —
+       degrade to "no neighbours" rather than pointing at the wrong ones. */
+    return { nav: { prev: null, next: null }, related: [] };
+  }
+
+  const self = docs[index];
+  const others = docs.filter((_, i) => i !== index);
+  /* Same programme first, then the list's own order fills the rest. */
+  const related = [
+    ...others.filter((d) => d.programme && d.programme === self.programme),
+    ...others.filter((d) => !d.programme || d.programme !== self.programme),
+  ]
+    .slice(0, RELATED_LIMIT)
+    .map(serialize);
+
+  return {
+    /* ⚠ Explicit nulls, attached OUTSIDE the serialisers — compact() would
+       drop them, and "no neighbour" is an answer the site needs stated. */
+    nav: {
+      prev: index > 0 ? serialize(docs[index - 1]) : null,
+      next: index < docs.length - 1 ? serialize(docs[index + 1]) : null,
+    },
+    related,
+  };
+};
+
 /* ⚠ The ONLY routes returning heavy fields — `details`, `agenda`, `html`. */
 
 router.get(
@@ -253,26 +289,46 @@ router.get(
 router.get(
   "/blogs/:slug",
   wrap(async (req, res) => {
-    const blog = await Blog.findOne({
-      slug: req.params.slug,
-      ...published(askedCountry(req)),
-    }).lean();
+    const code = askedCountry(req);
+    const [blog, siblings] = await Promise.all([
+      Blog.findOne({ slug: req.params.slug, ...published(code) }).lean(),
+      Blog.find(published(code))
+        .sort({ date: -1, createdAt: -1 })
+        .select("slug countries title programme date img excerpt")
+        .lean(),
+    ]);
     if (!blog) throw notFound("No such post");
+
+    const index = siblings.findIndex((d) => d.slug === blog.slug);
     cacheable(res);
-    res.json(publicBlog(blog));
+    res.json({ ...publicBlog(blog), ...around(siblings, index, publicBlogCard) });
   })
 );
 
 router.get(
   "/podcast/:slug",
   wrap(async (req, res) => {
-    const episode = await PodcastEpisode.findOne({
-      slug: req.params.slug,
-      ...published(askedCountry(req)),
-    }).lean();
+    const code = askedCountry(req);
+    const [episode, siblings] = await Promise.all([
+      PodcastEpisode.findOne({ slug: req.params.slug, ...published(code) }).lean(),
+      PodcastEpisode.find(published(code))
+        .sort({ order: 1, createdAt: 1 })
+        .select(
+          "slug countries title author programme audio video length cover publishedOn"
+        )
+        .lean(),
+    ]);
     if (!episode) throw notFound("No such episode");
+
+    const index = siblings.findIndex((d) => d.slug === episode.slug);
     cacheable(res);
-    res.json(publicEpisode(episode));
+    res.json({
+      ...publicEpisode(episode),
+      /* Its place in the running order — the badge number. The site used to
+         derive this from the bootstrap's first page, which broke past it. */
+      ...(index >= 0 ? { number: index + 1 } : {}),
+      ...around(siblings, index, publicEpisode),
+    });
   })
 );
 

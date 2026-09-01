@@ -32,6 +32,9 @@ export const publicEventCard = (doc) =>
     venue: doc.venue,
     programme: doc.programme,
     spots: doc.spots,
+    /* ⚠ `|| "free"`, twice over: pre-admission documents have no value, and ""
+       would be dropped by compact() — the site must never have to guess. */
+    admission: doc.admission || "free",
     img: doc.img,
     summary: doc.summary,
     /* ⚠ Not the form itself — only whether there IS one, so a card can show a
@@ -57,6 +60,7 @@ export const publicEvent = (doc) =>
     country: countryOf(doc.countries),
     kind: doc.kind,
     spots: doc.spots,
+    admission: doc.admission || "free",
     address: doc.address,
     title: doc.title,
     date: doc.date,
@@ -163,6 +167,9 @@ export const adminEvent = (doc) => ({
   coords: doc.coords ?? null,
   programme: doc.programme ?? null,
   spots: doc.spots ?? null,
+  /* ⚠ Also here — the admin PUTs the whole record back, so leaving this out
+     would reset every saved event to the default. */
+  admission: doc.admission || "free",
   img: doc.img,
   summary: doc.summary,
   details: doc.details,
@@ -238,6 +245,8 @@ export const adminRegistration = (doc) => ({
   name: doc.name ?? "",
   email: doc.email ?? "",
   note: doc.note ?? "",
+  /* Null = no record (pre-feature rows) — never render it as "No". */
+  photoConsent: doc.photoConsent ?? null,
   /* Null means no record — sent-and-unstamped and never-sent are
      indistinguishable, so the CMS says "unknown" rather than "never". */
   confirmationSentAt: doc.confirmationSentAt ?? null,

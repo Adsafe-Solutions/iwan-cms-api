@@ -34,6 +34,10 @@ export const CONFIG = {
      still run the middleware, rather than skipping it and testing nothing. */
   formWriteLimit: Number(process.env.FORM_WRITE_LIMIT ?? 8),
   formAttemptLimit: Number(process.env.FORM_ATTEMPT_LIMIT ?? 40),
+
+  /* Same idea for event registration, which carries its own tighter pair. */
+  registerWriteLimit: Number(process.env.REGISTER_WRITE_LIMIT ?? 5),
+  registerAttemptLimit: Number(process.env.REGISTER_ATTEMPT_LIMIT ?? 40),
 };
 
 export const isProduction = CONFIG.env === "production";

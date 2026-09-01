@@ -32,6 +32,8 @@ process.env.CORS_ORIGINS = "";
    come back in ten minutes. */
 process.env.FORM_WRITE_LIMIT = "1000";
 process.env.FORM_ATTEMPT_LIMIT = "5000";
+process.env.REGISTER_WRITE_LIMIT = "1000";
+process.env.REGISTER_ATTEMPT_LIMIT = "5000";
 
 /* ⚠ EMPTIED, not left to the environment, and not for tidiness: config.js loads
    .env, so a developer with a real RESEND_API_KEY had this suite making LIVE
@@ -282,6 +284,74 @@ await check("PATCH updates one field and leaves the rest alone", async () => {
   assert.equal(status, 200);
   assert.equal(body.venue, "The Annex");
   assert.equal(body.title, "Toronto Meetup");
+});
+
+await check("admission defaults to free, on the card and the detail", async () => {
+  const { body } = await call("GET", "/api/events/toronto-meetup?country=ca");
+  assert.equal(body.admission, "free");
+  const { body: list } = await call("GET", "/api/events?country=ca");
+  const card = list.items.find((e) => e.id === "toronto-meetup");
+  assert.equal(card.admission, "free", "the card omitted admission");
+});
+
+await check("admission round-trips as ticket", async () => {
+  const { body: list } = await call("GET", "/api/admin/events?q=toronto", { token });
+  const id = list.items[0].id;
+  const { status, body } = await call("PATCH", `/api/admin/events/${id}`, {
+    token,
+    body: { admission: "ticket" },
+  });
+  assert.equal(status, 200);
+  assert.equal(body.admission, "ticket");
+  const { body: pub } = await call("GET", "/api/events/toronto-meetup?country=ca");
+  assert.equal(pub.admission, "ticket");
+});
+
+await check("an admission the enum does not know is refused", async () => {
+  const { body: list } = await call("GET", "/api/admin/events?q=toronto", { token });
+  const { status, body } = await call("PATCH", `/api/admin/events/${list.items[0].id}`, {
+    token,
+    body: { admission: "vip" },
+  });
+  assert.equal(status, 400);
+  assert.ok(body.details.some((d) => d.field === "admission"));
+});
+
+await check("a past event is served when ?from= reaches back for it", async () => {
+  /* /events with from = two months back is how the site shows recently-ended
+     events in the same list — the $gte filter is the whole mechanism. */
+  const monthAgo = new Date();
+  monthAgo.setMonth(monthAgo.getMonth() - 1);
+  const date = monthAgo.toISOString().slice(0, 10);
+  const twoBack = new Date();
+  twoBack.setMonth(twoBack.getMonth() - 2);
+
+  await call("POST", "/api/admin/events", {
+    token,
+    body: {
+      slug: "last-month",
+      title: "Last month",
+      countries: [],
+      status: "published",
+      date,
+      form: MINIMAL_FORM,
+    },
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const reaching = await call(
+    "GET",
+    `/api/events?from=${twoBack.toISOString().slice(0, 10)}`
+  );
+  assert.ok(
+    reaching.body.items.some((e) => e.id === "last-month"),
+    "the ended event is missing from the reached-back list"
+  );
+  const upcoming = await call("GET", `/api/events?from=${today}`);
+  assert.ok(
+    !upcoming.body.items.some((e) => e.id === "last-month"),
+    "an ended event leaked into the upcoming list"
+  );
 });
 
 console.log("\nthe registration form");
@@ -748,6 +818,48 @@ await check("⚠ a CSV answer cannot become a spreadsheet formula", async () => 
   assert.match(csv, /'=HYPERLINK/);
 });
 
+await check("photo consent rides beside the answers, three states", async () => {
+  /* Like `subscribe`: a fixed site-wide field, not one of the event's own
+     questions — buildAnswers would drop it as an unknown key. */
+  await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: {
+      answers: REG({ email: "consenting@example.com" }),
+      photoConsent: true,
+    },
+  });
+  await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: {
+      answers: REG({ email: "declining@example.com" }),
+      photoConsent: false,
+    },
+  });
+
+  const { body } = await call("GET", "/api/admin/registrations?event=fishing-day", {
+    token,
+  });
+  const byEmail = Object.fromEntries(body.items.map((r) => [r.email, r.photoConsent]));
+  assert.equal(byEmail["consenting@example.com"], true);
+  assert.equal(byEmail["declining@example.com"], false);
+  /* The first registration predates the field being sent — null, never false. */
+  assert.equal(byEmail["aisha@example.com"], null);
+});
+
+await check("the CSV carries photo consent as its own column", async () => {
+  const res = await fetch(`${base}/api/admin/registrations/export?event=fishing-day`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const csv = await res.text();
+  const [header, ...rows] = csv.trimEnd().split("\r\n");
+  assert.match(header, /Photo consent/);
+  /* A Date used to fall into the object branch of cell() and render empty. */
+  assert.match(rows[0], /^\d{4}-\d{2}-\d{2}T/, "the Submitted cell is blank");
+  const col = header.split(",").indexOf("Photo consent");
+  const cellsFor = (email) =>
+    rows.find((r) => r.includes(email.split("@")[0]))?.split(",") ?? [];
+  assert.equal(cellsFor("declining@example.com")[col], "No");
+  assert.equal(cellsFor("consenting@example.com")[col], "Yes");
+});
+
 console.log("\nresending a confirmation");
 
 /* ⚠ WHAT THIS RUN CANNOT COVER, stated so the gap is not mistaken for cover.
@@ -929,6 +1041,28 @@ await check("the site is served both urls", async () => {
   assert.equal(ep.programme, "/iwan-youth");
 });
 
+await check("the public podcast list takes the programme filter", async () => {
+  /* Same server-side filter events and blogs already honour — page one of
+     "youth episodes" is not page one of everything. */
+  const youth = await call("GET", "/api/podcast?programme=/iwan-youth");
+  assert.ok(youth.body.items.some((e) => e.id === "video-only"));
+  assert.ok(
+    youth.body.items.every((e) => e.programme === "/iwan-youth"),
+    "an episode from another programme got through"
+  );
+  assert.equal(youth.body.total, youth.body.items.length);
+
+  const community = await call("GET", "/api/podcast?programme=__none");
+  assert.ok(community.body.items.some((e) => e.id === "coco"));
+  assert.ok(
+    community.body.items.every((e) => !e.programme),
+    "a programme episode matched __none"
+  );
+
+  const all = await call("GET", "/api/podcast");
+  assert.ok(all.body.total >= youth.body.total + community.body.total);
+});
+
 console.log("\nthe programme filter");
 
 await check("filtering by programme narrows the admin list", async () => {
@@ -962,6 +1096,51 @@ await check("a type with no programme field ignores the filter", async () => {
     token,
   });
   assert.equal(filtered.body.total, all.body.total);
+});
+
+console.log("\ndetail nav and related");
+
+await check("a blog detail carries its neighbours and related posts", async () => {
+  /* Three dated posts on top of the earlier fixtures. Blogs list newest-first,
+     so rel-a is the head of the list. */
+  for (const [slug, date, programme] of [
+    ["rel-a", "2026-05-03", "/iwan-youth"],
+    ["rel-b", "2026-05-02", "/iwan-youth"],
+    ["rel-c", "2026-05-01", null],
+  ]) {
+    await call("POST", "/api/admin/blogs", {
+      token,
+      body: { slug, title: slug, status: "published", date, programme, html: "<p>x</p>" },
+    });
+  }
+
+  const { body } = await call("GET", "/api/blogs/rel-b");
+  /* Display order: prev is the newer neighbour, next the older. */
+  assert.equal(body.nav.prev.id, "rel-a");
+  assert.equal(body.nav.next.id, "rel-c");
+  /* Same programme first, then the list's own order pads to three. */
+  assert.equal(body.related.length, 3);
+  assert.equal(body.related[0].id, "rel-a");
+  assert.ok(!body.related.some((b) => b.id === "rel-b"), "related includes itself");
+  /* Cards, not details — html must not ride along. */
+  assert.equal("html" in body.related[0], false);
+  assert.equal("html" in body.nav.prev, false);
+});
+
+await check("the newest post has no prev — stated, not omitted", async () => {
+  const { body } = await call("GET", "/api/blogs/rel-a");
+  assert.equal(body.nav.prev, null);
+  assert.equal(body.nav.next.id, "rel-b");
+});
+
+await check("an episode detail carries number, neighbours and related", async () => {
+  /* Episodes list by running order then creation: coco, video-only, audio-only. */
+  const { body } = await call("GET", "/api/podcast/video-only");
+  assert.equal(body.number, 2);
+  assert.equal(body.nav.prev.id, "coco");
+  assert.equal(body.nav.next.id, "audio-only");
+  assert.ok(!body.related.some((e) => e.id === "video-only"), "related includes itself");
+  assert.ok(body.related.length >= 2);
 });
 
 console.log("\npromos");
@@ -1679,6 +1858,14 @@ await check("⚠ an event sign-up reaches the audience by itself", async () => {
   assert.equal(body.total, 1, "the registration fixture never reached the audience");
   assert.ok(body.items[0].sources.includes("event"));
   assert.equal(body.items[0].name, "Aisha Rahman", "the name did not come across");
+});
+
+await check("?source=contact narrows the audience to contact people", async () => {
+  /* What the CMS's Contact menu lists — people with the contact source,
+     nobody else. The event fixture above must not appear. */
+  const { body } = await call("GET", "/api/admin/audience?source=contact", { token });
+  assert.ok(body.items.every((r) => r.sources.includes("contact")));
+  assert.ok(!body.items.some((r) => r.email === "aisha@example.com"));
 });
 
 await check("⚠ an event sign-up carries its own subscribe flag", async () => {

@@ -46,6 +46,8 @@ const eventSchema = new mongoose.Schema(
     programme: { type: String, trim: true, default: null },
 
     spots: { type: Number, min: 0, default: null },
+    /* What entry costs — copy on the register panel, not a payment feature. */
+    admission: { type: String, enum: ["free", "ticket"], default: "free" },
     img: { type: String, trim: true, default: "" },
 
     summary: { type: String, trim: true, default: "" },

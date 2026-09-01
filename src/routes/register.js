@@ -7,6 +7,7 @@ import { COUNTRY_CODES, countryQuery, isCountryCode } from "../lib/countries.js"
 import { buildAnswers, summarise } from "../validators/registration.js";
 import { sendRegistrationConfirmation } from "../lib/mail.js";
 import { recordAudience } from "../lib/audience.js";
+import { CONFIG } from "../config.js";
 
 /* The one route the public can WRITE to, and therefore the whole attack surface
    for spam and junk data — hence the rate limits below, the capacity check, and
@@ -21,7 +22,7 @@ const router = Router();
    ⚠ Both need `trust proxy` on the app or every request shares one bucket. */
 const submissionLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  limit: 5,
+  limit: CONFIG.registerWriteLimit,
   skipFailedRequests: true,
   standardHeaders: "draft-7",
   legacyHeaders: false,
@@ -33,7 +34,7 @@ const submissionLimiter = rateLimit({
 /* The backstop: headroom for someone correcting a long form repeatedly. */
 const attemptLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  limit: 40,
+  limit: CONFIG.registerAttemptLimit,
   standardHeaders: "draft-7",
   legacyHeaders: false,
   message: { error: "Too many attempts. Try again in a few minutes." },
@@ -98,6 +99,10 @@ router.post(
       answers,
       name,
       email,
+      /* Same beside-the-answers convention as `subscribe` below. Only an
+         explicit boolean counts; anything else records null — no answer. */
+      photoConsent:
+        typeof req.body?.photoConsent === "boolean" ? req.body.photoConsent : null,
     });
 
     /* ⚠ Awaited, unlike the confirmation email below. This is a database write

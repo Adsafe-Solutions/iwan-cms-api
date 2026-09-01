@@ -51,6 +51,11 @@ const registrationSchema = new mongoose.Schema(
       index: true,
     },
 
+    /* The site-wide photography checkbox, sent BESIDE the answers like
+       `subscribe` — not one of them, so no event's form has to carry it.
+       ⚠ Null means NO RECORD (rows predating the field), never "declined". */
+    photoConsent: { type: Boolean, default: null },
+
     /* An organiser's private note. Never shown to the registrant. */
     note: { type: String, trim: true, default: "" },
 

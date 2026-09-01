@@ -14,13 +14,17 @@ const cell = (value) => {
       ? ""
       : Array.isArray(value)
         ? value.join("; ")
-        : typeof value === "object"
-          ? [value.first, value.last].filter(Boolean).join(" ")
-          : typeof value === "boolean"
-            ? value
-              ? "Yes"
-              : "No"
-            : String(value);
+        : value instanceof Date
+          ? /* ⚠ Before the object branch, or a Date lands there and renders
+               as an empty {first,last} — every Submitted cell was blank. */
+            value.toISOString()
+          : typeof value === "object"
+            ? [value.first, value.last].filter(Boolean).join(" ")
+            : typeof value === "boolean"
+              ? value
+                ? "Yes"
+                : "No"
+              : String(value);
 
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
@@ -56,6 +60,9 @@ export function toCsv(rows = []) {
     "Event",
     "Country",
     "Status",
+    /* Fixed, not one of the questions — it rides beside the answers on every
+       registration. `cell` renders null as blank: no record, not "No". */
+    "Photo consent",
     ...questions.map((q) => q.label),
     "Note",
   ];
@@ -70,6 +77,7 @@ export function toCsv(rows = []) {
         row.eventTitle || row.eventSlug,
         (row.country ?? "").toUpperCase(),
         row.status,
+        row.photoConsent,
         ...questions.map((q) => byKey[q.key]),
         row.note ?? "",
       ]

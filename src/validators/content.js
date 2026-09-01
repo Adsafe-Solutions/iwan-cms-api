@@ -31,6 +31,7 @@ export const eventInput = z.object({
 
   programme: f.programme,
   spots: z.union([z.number().int().min(0), z.null()]).default(null),
+  admission: z.enum(["free", "ticket"]).default("free"),
   img: f.url,
 
   summary: f.text(400),
