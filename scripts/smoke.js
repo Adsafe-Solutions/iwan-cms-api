@@ -1928,6 +1928,41 @@ await check("with R2 unset, uploading says so rather than half-working", async (
   assert.match(body.error, /not configured/i);
 });
 
+console.log("\naddress search");
+
+/* ⚠ These do NOT reach Photon. The suite must not depend on a third party
+   being up, or a network blip fails a run that found nothing wrong — and
+   hammering a free service on every run is not a fair use of it. What is
+   covered here is the route: the sign-in, the short-query rule and the shape.
+   The provider itself is exercised by hand against real queries. */
+
+await check("address search needs a sign-in", async () => {
+  const { status } = await call("GET", "/api/admin/places?q=cubbon+park");
+  assert.equal(status, 401);
+});
+
+await check("a half-typed query is an empty list, not a 400", async () => {
+  /* A search box is half-typed most of the time — treating that as a caller
+     error would put a red banner under every second keystroke. */
+  const { status, body } = await call("GET", "/api/admin/places?q=ab", { token });
+  assert.equal(status, 200);
+  assert.deepEqual(body.items, []);
+  assert.equal(body.query, "ab");
+});
+
+await check("an empty query is an empty list", async () => {
+  const { status, body } = await call("GET", "/api/admin/places", { token });
+  assert.equal(status, 200);
+  assert.deepEqual(body.items, []);
+});
+
+await check("⚠ a viewer CAN search — it is a read", async () => {
+  /* requireWriter guards on the method, and this is a GET. A read-only
+     account can look an address up; it just cannot save the event. */
+  const { status } = await call("GET", "/api/admin/places?q=ab", { token: viewerToken });
+  assert.equal(status, 200);
+});
+
 console.log("\nthe audience");
 
 /* Every public form funnels into one row per person, keyed on the email. The

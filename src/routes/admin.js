@@ -3,6 +3,7 @@ import { crudRouter } from "./crud.js";
 import registrationRoutes from "./registrations.js";
 import audienceRoutes, { applicationRouter } from "./audience.js";
 import uploadRoutes from "./uploads.js";
+import placeRoutes from "./places.js";
 import { Event } from "../models/Event.js";
 import { Blog } from "../models/Blog.js";
 import { PodcastEpisode, PodcastShow } from "../models/Podcast.js";
@@ -266,6 +267,7 @@ router.use("/registrations", registrationRoutes);
 router.use("/audience", audienceRoutes);
 router.use("/applications", applicationRouter);
 router.use("/uploads", uploadRoutes);
+router.use("/places", placeRoutes);
 
 /* Admins only: an editor who could create accounts could create an unscoped
    one and step around their own country scope. */
