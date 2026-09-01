@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { CONFIG } from "../config.js";
 import { renderRegistrationConfirmation } from "./emails/registration.js";
+import { renderNotification } from "./emails/notification.js";
 
 /* Transactional mail: the TRANSPORT only — markup lives in emails/.
 
@@ -10,6 +11,11 @@ import { renderRegistrationConfirmation } from "./emails/registration.js";
 const resend = CONFIG.resendApiKey ? new Resend(CONFIG.resendApiKey) : null;
 
 export const MAIL_ENABLED = Boolean(resend && CONFIG.mailFrom);
+
+/* Notifying Iwan needs somewhere to notify. Separate from MAIL_ENABLED: a
+   deployment can perfectly well confirm to registrants without telling
+   anyone internally, and did until this existed. */
+export const NOTIFY_ENABLED = Boolean(MAIL_ENABLED && CONFIG.mailTo.length);
 
 /* `date` is a plain day string, so there is no timezone to convert.
 
@@ -72,5 +78,52 @@ export async function sendRegistrationConfirmation({ registration, event }) {
     return { sent: false, reason: err?.message ?? "send-threw" };
   }
 }
+
+/**
+ * Tells Iwan that a form was filled in.
+ *
+ * ⚠ NEVER THROWS, and callers do not await it — the submission is already
+ * saved and answered. A notification that cannot be sent is a notification
+ * nobody gets, not a form that failed.
+ *
+ * `replyTo` is the SUBMITTER's address where there is one, so replying from
+ * the inbox writes back to the person rather than to Iwan itself.
+ *
+ * @returns {Promise<{sent: boolean, reason?: string, id?: string}>}
+ */
+export async function sendNotification({ replyTo, ...content }) {
+  if (!NOTIFY_ENABLED) return { sent: false, reason: "notify-disabled" };
+
+  const { subject, html, text } = renderNotification(content);
+
+  try {
+    const { data, error } = await resend.emails.send({
+      from: CONFIG.mailFrom,
+      to: CONFIG.mailTo,
+      subject,
+      text,
+      html,
+      ...(replyTo ? { replyTo } : {}),
+    });
+
+    if (error) {
+      console.error("Notification email failed:", error);
+      return { sent: false, reason: error.message ?? "send-failed" };
+    }
+    return { sent: true, id: data?.id };
+  } catch (err) {
+    console.error("Notification email threw:", err);
+    return { sent: false, reason: err?.message ?? "send-threw" };
+  }
+}
+
+/* ⚠ Fire-and-forget, with the rejection swallowed. sendNotification already
+   never throws, so this is belt and braces against a future edit that makes
+   it — an unhandled rejection takes the process down on Node. */
+export const notify = (content) => {
+  void sendNotification(content).catch((err) =>
+    console.error("Notification threw past its own guard:", err)
+  );
+};
 
 export default sendRegistrationConfirmation;

@@ -44,6 +44,10 @@ process.env.REGISTER_ATTEMPT_LIMIT = "5000";
    in keys ABSENT from process.env. */
 process.env.RESEND_API_KEY = "";
 process.env.MAIL_FROM = "";
+/* ⚠ And the notification address, for the same reason — a developer with
+   MAIL_TO set would have every smoke run emailing a real inbox. */
+process.env.MAIL_TO = "";
+process.env.CMS_URL = "";
 
 /* ⚠ EMPTIED for the same reason, and it bit exactly the same way: config.js
    loads .env, so a developer with real R2 credentials had this suite PUTting
@@ -1926,6 +1930,69 @@ await check("with R2 unset, uploading says so rather than half-working", async (
   const { status, body } = await postFile(PNG_1PX, { token });
   assert.equal(status, 400);
   assert.match(body.error, /not configured/i);
+});
+
+console.log("\nnotifications");
+
+/* ⚠ Mail is OFF in this run (see the env block at the top), so what is proved
+   here is the thing that actually matters: a notification that cannot be sent
+   NEVER affects the submission. The rendering and a real send are covered by
+   hand against Resend. */
+
+await check("a registration still succeeds with notifications off", async () => {
+  const { status } = await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: { answers: REG({ email: "notify-off@example.com" }) },
+  });
+  assert.equal(status, 201);
+});
+
+await check("contact still succeeds with notifications off", async () => {
+  const { status } = await call("POST", "/api/contact", {
+    body: {
+      email: "quiet@example.com",
+      name: "Quiet Person",
+      subject: "Does this still work",
+      message: "It should.",
+    },
+  });
+  assert.equal(status, 201);
+});
+
+await check("subscribing still succeeds with notifications off", async () => {
+  const { status } = await call("POST", "/api/subscribe", {
+    body: { email: "quiet-sub@example.com" },
+  });
+  assert.equal(status, 201);
+});
+
+await check("the notification renders every answer, escaped", async () => {
+  /* Rendering is pure, so it is tested directly — no network, no mail. */
+  const { renderNotification } = await import("../src/lib/emails/notification.js");
+  const { subject, html, text } = renderNotification({
+    subject: "New registration: Fishing Day",
+    heading: "Someone registered",
+    rows: [
+      ["Name", { first: "Aisha", last: "Rahman" }],
+      ["Diet", ["No nuts", "Halal"]],
+      ["Newsletter", true],
+      ["Photos", false],
+      ["Empty", ""],
+      ["Nasty", "<script>alert(1)</script>"],
+    ],
+  });
+  assert.equal(subject, "New registration: Fishing Day");
+  /* Each value type flattens the way the CSV does. */
+  assert.match(html, /Aisha Rahman/);
+  assert.match(html, /No nuts, Halal/);
+  assert.match(html, /Yes/);
+  assert.match(html, /No/);
+  /* ⚠ A blank value drops its ROW rather than printing an empty one. */
+  assert.ok(!html.includes("Empty"), "an empty row was rendered");
+  /* ⚠ Everything here came from a public form. */
+  assert.ok(!html.includes("<script>"), "a script tag survived into the email");
+  assert.match(html, /&lt;script&gt;/);
+  /* Some clients render text only, and no text/plain scores worse for spam. */
+  assert.match(text, /Name: Aisha Rahman/);
 });
 
 console.log("\naddress search");

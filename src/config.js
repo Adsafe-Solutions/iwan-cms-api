@@ -28,6 +28,14 @@ export const CONFIG = {
   /* Builds the event link in the confirmation. Optional — the mail omits it. */
   siteUrl: process.env.SITE_URL ?? "",
 
+  /* ⚠ Where IWAN is notified — the opposite direction to mailFrom. Every form
+     on the site sends a heads-up here: registrations, messages, applications,
+     subscriptions. Comma-separated for more than one; unset means no
+     notifications at all, and every form still works. */
+  mailTo: list(process.env.MAIL_TO),
+  /* Deep-links the notification at the right CMS screen. Optional. */
+  cmsUrl: (process.env.CMS_URL ?? "").replace(/\/$/, ""),
+
   /* How many public form submissions one address may make per ten minutes.
      ⚠ Shared across subscribe, contact, volunteer and career — the limit is on
      the person, not the form. Configurable so the smoke suite can raise it and
@@ -87,6 +95,12 @@ export function assertConfig() {
      being set is fine — that is mail switched off. */
   if (CONFIG.resendApiKey && !CONFIG.mailFrom) {
     problems.push("RESEND_API_KEY is set but MAIL_FROM is not — mail cannot send");
+  }
+
+  /* ⚠ Same trap in the other direction: an address to notify with no way to
+     send would silently notify nobody. */
+  if (CONFIG.mailTo.length && !CONFIG.resendApiKey) {
+    problems.push("MAIL_TO is set but RESEND_API_KEY is not — nothing can be sent");
   }
 
   /* ⚠ Same all-or-nothing rule as mail. A half-set R2 block would let the CMS

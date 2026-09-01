@@ -5,6 +5,7 @@ import { Application } from "../models/Application.js";
 import { badRequest, wrap } from "../lib/errors.js";
 import { validate } from "../middleware/validate.js";
 import { recordAudience } from "../lib/audience.js";
+import { notify } from "../lib/mail.js";
 import { COUNTRY_CODES, isCountryCode } from "../lib/countries.js";
 import { buildAnswers, summarise } from "../validators/registration.js";
 import { contactInput, subscribeInput } from "../validators/forms.js";
@@ -53,13 +54,28 @@ router.post(
   writeLimiter,
   validate(subscribeInput),
   wrap(async (req, res) => {
+    const country = askedCountry(req);
     await recordAudience({
       ...req.body,
       subscribe: true,
       source: "subscribe",
-      country: askedCountry(req),
+      country,
     });
     ok(res);
+
+    /* ⚠ After the response and never awaited, like every notification here —
+       the person is on the list whether or not the mail goes out. */
+    notify({
+      subject: "New newsletter subscriber",
+      heading: "Someone subscribed to the newsletter",
+      rows: [
+        ["Email", req.body.email],
+        ["Country", country.toUpperCase()],
+      ],
+      cmsUrl: CONFIG.cmsUrl ? `${CONFIG.cmsUrl}/audience?source=subscribe` : "",
+      cmsLabel: "See the audience",
+      replyTo: req.body.email,
+    });
   })
 );
 
@@ -70,13 +86,35 @@ router.post(
   validate(contactInput),
   wrap(async (req, res) => {
     const { subject, message, ...person } = req.body;
+    const country = askedCountry(req);
     await recordAudience({
       ...person,
       source: "contact",
-      country: askedCountry(req),
+      country,
       message: { subject, body: message },
     });
     ok(res);
+
+    /* ⚠ The one form where the mail genuinely matters: a contact message is a
+       question waiting on an answer, and until now it sat in the CMS with
+       nobody told it had arrived. `replyTo` is the sender, so hitting reply
+       in the inbox writes back to them. */
+    notify({
+      subject: `New message: ${subject}`,
+      heading: "Someone sent a message",
+      intro: `${person.name || "Someone"} used the contact form.`,
+      rows: [
+        ["Name", person.name],
+        ["Email", person.email],
+        ["Mobile", person.mobile],
+        ["Country", country.toUpperCase()],
+        ["Subject", subject],
+        ["Message", message],
+      ],
+      cmsUrl: CONFIG.cmsUrl ? `${CONFIG.cmsUrl}/contact` : "",
+      cmsLabel: "Open the contact inbox",
+      replyTo: person.email,
+    });
   })
 );
 
@@ -142,6 +180,26 @@ const application = (kind) => [
     });
 
     ok(res);
+
+    notify({
+      subject: `New ${kind} application: ${name || email}`,
+      heading:
+        kind === "career"
+          ? "Someone applied to work with Iwan"
+          : "Someone offered to volunteer",
+      intro: `${name || "Someone"} filled in the ${kind} form.`,
+      rows: [
+        ["Name", name],
+        ["Email", email],
+        ["Mobile", mobile],
+        ["Country", country.toUpperCase()],
+        /* Every answer, so the inbox is enough to judge it on. */
+        ...answers.map((a) => [a.label, a.value]),
+      ],
+      cmsUrl: CONFIG.cmsUrl ? `${CONFIG.cmsUrl}/applications?kind=${kind}` : "",
+      cmsLabel: "Open the applications",
+      replyTo: email,
+    });
   }),
 ];
 

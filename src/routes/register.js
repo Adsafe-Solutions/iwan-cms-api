@@ -5,7 +5,7 @@ import { Registration } from "../models/Registration.js";
 import { badRequest, notFound, wrap } from "../lib/errors.js";
 import { COUNTRY_CODES, countryQuery, isCountryCode } from "../lib/countries.js";
 import { buildAnswers, summarise } from "../validators/registration.js";
-import { sendRegistrationConfirmation } from "../lib/mail.js";
+import { notify, sendRegistrationConfirmation } from "../lib/mail.js";
 import { recordAudience } from "../lib/audience.js";
 import { CONFIG } from "../config.js";
 
@@ -90,6 +90,14 @@ router.post(
       }
     }
 
+    /* Both read twice — once to store, once for the notification below. */
+    const photoConsent =
+      typeof req.body?.photoConsent === "boolean" ? req.body.photoConsent : null;
+    const subscribed =
+      typeof req.body?.subscribe === "boolean"
+        ? req.body.subscribe
+        : summarised.subscribe;
+
     const registration = await Registration.create({
       event: event._id,
       eventSlug: event.slug,
@@ -101,8 +109,7 @@ router.post(
       email,
       /* Same beside-the-answers convention as `subscribe` below. Only an
          explicit boolean counts; anything else records null — no answer. */
-      photoConsent:
-        typeof req.body?.photoConsent === "boolean" ? req.body.photoConsent : null,
+      photoConsent,
     });
 
     /* ⚠ Awaited, unlike the confirmation email below. This is a database write
@@ -120,10 +127,7 @@ router.post(
          to every form would never survive validation. An event whose form asks
          the question itself still works — summarise reads that consent — and
          this only takes over when the caller states it outright. */
-      subscribe:
-        typeof req.body?.subscribe === "boolean"
-          ? req.body.subscribe
-          : summarised.subscribe,
+      subscribe: subscribed,
       source: "event",
       country,
     });
@@ -134,6 +138,37 @@ router.post(
       ok: true,
       id: String(registration._id),
       event: { slug: event.slug, title: event.title },
+    });
+
+    /* ⚠ Iwan's own heads-up, beside the registrant's confirmation and after
+       the response for the same reason: the place is booked either way. The
+       ANSWERS are included so the inbox is enough to act on without opening
+       the CMS. */
+    notify({
+      subject: `New registration: ${event.title}`,
+      heading: "Someone registered for an event",
+      intro: `${name || "Someone"} signed up for ${event.title}.`,
+      rows: [
+        ["Event", event.title],
+        [
+          "When",
+          [event.date, [event.start, event.end].filter(Boolean).join("–")]
+            .filter(Boolean)
+            .join(", "),
+        ],
+        ["Name", name],
+        ["Email", email],
+        ["Mobile", summarised.mobile],
+        ["Country", country.toUpperCase()],
+        ...answers.map((a) => [a.label, a.value]),
+        ["Newsletter", subscribed],
+        ["Photos", photoConsent === null ? "" : photoConsent],
+      ],
+      cmsUrl: CONFIG.cmsUrl
+        ? `${CONFIG.cmsUrl}/event-registrations?event=${event.slug}`
+        : "",
+      cmsLabel: "See it in the CMS",
+      replyTo: email || undefined,
     });
 
     /* ⚠ AFTER the response and not awaited. Making the 201 depend on a mail
