@@ -333,6 +333,74 @@ await check("an admission the enum does not know is refused", async () => {
   assert.ok(body.details.some((d) => d.field === "admission"));
 });
 
+await check("⚠ upcoming come first, then past — newest past at the top", async () => {
+  /* The listing reaches two months back, and a plain date-ascending sort put
+     the OLDEST ended event on page one, which reads as a stale site. */
+  const day = (offset) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    return d.toISOString().slice(0, 10);
+  };
+  const seed = [
+    ["order-soon", day(3)],
+    ["order-later", day(30)],
+    ["order-recent-past", day(-5)],
+    ["order-older-past", day(-40)],
+  ];
+  for (const [slug, date] of seed) {
+    await call("POST", "/api/admin/events", {
+      token,
+      body: {
+        slug,
+        title: slug,
+        countries: [],
+        status: "published",
+        date,
+        form: MINIMAL_FORM,
+      },
+    });
+  }
+
+  const { body } = await call(
+    "GET",
+    `/api/events?from=${day(-60)}&today=${day(0)}&limit=50`
+  );
+  const seen = body.items.map((e) => e.id).filter((id) => id.startsWith("order-"));
+  assert.deepEqual(
+    seen,
+    ["order-soon", "order-later", "order-recent-past", "order-older-past"],
+    "events are not ordered upcoming-soonest then past-newest"
+  );
+});
+
+await check("the ordering survives paging across the upcoming/past seam", async () => {
+  /* The boundary can fall mid-page — the whole reason this is one aggregation
+     rather than two stitched queries. */
+  const day = (o) => {
+    const d = new Date();
+    d.setDate(d.getDate() + o);
+    return d.toISOString().slice(0, 10);
+  };
+  const all = [];
+  for (const page of [1, 2, 3, 4, 5, 6]) {
+    const { body } = await call(
+      "GET",
+      `/api/events?from=${day(-60)}&today=${day(0)}&limit=1&page=${page}`
+    );
+    all.push(...body.items.map((e) => e.id));
+  }
+  const ours = all.filter((id) => id.startsWith("order-"));
+  /* Paged one at a time, the sequence must match the single-page one. */
+  assert.deepEqual(ours, [
+    "order-soon",
+    "order-later",
+    "order-recent-past",
+    "order-older-past",
+  ]);
+  /* ⚠ And nothing may be served twice or skipped by the aggregation's skip. */
+  assert.equal(new Set(all).size, all.length, "a page repeated an event");
+});
+
 await check("a past event is served when ?from= reaches back for it", async () => {
   /* /events with from = two months back is how the site shows recently-ended
      events in the same list — the $gte filter is the whole mechanism. */

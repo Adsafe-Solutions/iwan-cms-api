@@ -57,7 +57,7 @@ export function renderRegistrationConfirmation({
 
   /* ⚠ The grey preview line beside the subject. Left unset, clients scrape the
      first text they find — here the brand name, which says nothing. */
-  const preheader = `Your place at ${eventTitle} is confirmed.`;
+  const preheader = `Your spot at ${eventTitle} is confirmed.`;
 
   const rows = [when && detailRow("When", when), where && detailRow("Where", where)]
     .filter(Boolean)
@@ -107,7 +107,7 @@ export function renderRegistrationConfirmation({
           <td style="padding:34px 32px 8px 32px;">
             <h1 style="margin:0 0 6px 0;font-family:${FONT};font-size:24px;line-height:31px;font-weight:800;color:${BRAND.ink};">You're registered</h1>
             <p style="margin:0 0 20px 0;font-family:${FONT};font-size:16px;line-height:24px;color:${BRAND.muted};">${escapeHtml(greeting)}</p>
-            <p style="margin:0 0 22px 0;font-family:${FONT};font-size:16px;line-height:24px;color:${BRAND.ink};">Your place at <strong style="color:${BRAND.ink};">${escapeHtml(eventTitle)}</strong> is confirmed. We look forward to seeing you.</p>
+            <p style="margin:0 0 22px 0;font-family:${FONT};font-size:16px;line-height:24px;color:${BRAND.ink};">Your spot at <strong style="color:${BRAND.ink};">${escapeHtml(eventTitle)}</strong> is confirmed. We look forward to seeing you.</p>
           </td>
         </tr>
 ${
@@ -129,7 +129,7 @@ ${rows}
         <tr>
           <td style="padding:22px 32px 34px 32px;">
 ${button}
-            <p style="margin:22px 0 0 0;font-family:${FONT};font-size:14px;line-height:21px;color:${BRAND.muted};">Can no longer make it? Just reply to this email and let us know, so we can offer your place to someone else.</p>
+            <p style="margin:22px 0 0 0;font-family:${FONT};font-size:14px;line-height:21px;color:${BRAND.muted};">Can no longer make it? Just reply to this email and let us know, so we can offer your spot to someone else.</p>
           </td>
         </tr>
 
@@ -151,13 +151,13 @@ ${button}
   const text = [
     greeting,
     "",
-    `Your place at ${eventTitle} is confirmed. We look forward to seeing you.`,
+    `Your spot at ${eventTitle} is confirmed. We look forward to seeing you.`,
     "",
     when && `When:  ${when}`,
     where && `Where: ${where}`,
     eventUrl && `Details: ${eventUrl}`,
     "",
-    "Can no longer make it? Just reply to this email and let us know, so we can offer your place to someone else.",
+    "Can no longer make it? Just reply to this email and let us know, so we can offer your spot to someone else.",
     "",
     `— ${brandName}`,
   ]

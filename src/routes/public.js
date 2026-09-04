@@ -91,14 +91,68 @@ const eventsQuery = (req, code) => ({
   ...programmeFilter(req),
 });
 
-const listEvents = (req, code, fallbackLimit) =>
-  paged(
-    Event,
-    eventsQuery(req, code),
-    /* Soonest first, so paging puts the next event on page one. */
-    { sort: { date: 1 }, ...paging(req, fallbackLimit) },
-    publicEventCard
-  );
+/* ⚠ UPCOMING FIRST, PAST BELOW — and the two halves run in opposite
+   directions: soonest-first for what is coming up, most-recent-first for what
+   has been. A plain `{ date: 1 }` cannot express that, and with the listing's
+   two-month reach-back it put the oldest ended event at the top of page one,
+   which read as the site showing stale content.
+
+   Done as one aggregation rather than two queries so that `skip`/`limit` still
+   page across the whole list: the boundary between upcoming and past can fall
+   in the middle of a page, and stitching two paged queries together at that
+   seam is where this goes wrong.
+
+   `rank` splits them; `key` orders within each half. Negating the past half's
+   epoch millis is what reverses only that half — ascending over a negated
+   value is descending over the original. */
+const eventsOrdering = (today) => [
+  {
+    $addFields: {
+      __ms: { $toLong: { $toDate: "$date" } },
+    },
+  },
+  {
+    $addFields: {
+      __rank: { $cond: [{ $gte: ["$date", today] }, 0, 1] },
+      __key: {
+        $cond: [{ $gte: ["$date", today] }, "$__ms", { $multiply: ["$__ms", -1] }],
+      },
+    },
+  },
+  { $sort: { __rank: 1, __key: 1, _id: 1 } },
+];
+
+const listEvents = async (req, code, fallbackLimit) => {
+  const where = eventsQuery(req, code);
+  const { page, limit, skip } = paging(req, fallbackLimit);
+  /* ⚠ `?today=`, NOT `?from=`. They are different dates and conflating them
+     was a real bug: the listing sends `from` two months back to reach ended
+     events, so reading today out of it made every one of them "upcoming" and
+     collapsed the whole thing to plain date-ascending. `from` is the floor of
+     the range; `today` is where upcoming stops and past begins.
+
+     The VISITOR's day, like every other date decision here — a server in UTC
+     would put an event happening tonight in the past half for someone reading
+     that morning. Falling back to the server's day only when the site did not
+     say. */
+  const today = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.today ?? ""))
+    ? String(req.query.today)
+    : new Date().toISOString().slice(0, 10);
+
+  const [items, total] = await Promise.all([
+    Event.aggregate([
+      { $match: where },
+      ...eventsOrdering(today),
+      { $skip: skip },
+      { $limit: limit },
+      /* The helper fields are bookkeeping, not payload. */
+      { $unset: ["__ms", "__rank", "__key"] },
+    ]),
+    Event.countDocuments(where),
+  ]);
+
+  return { items: items.map(publicEventCard), total, page, limit };
+};
 
 const listBlogs = (req, code, fallbackLimit) =>
   paged(
