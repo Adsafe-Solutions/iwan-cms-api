@@ -4,11 +4,8 @@ import { Promo } from "../models/Promo.js";
 import * as f from "./fields.js";
 import { badRequest } from "../lib/errors.js";
 import { sanitize } from "../lib/html.js";
-import {
-  formInput,
-  assertFormIsCoherent,
-  assertFormPresentWhenPublished,
-} from "./form.js";
+import { formInput, assertFormIsCoherent } from "./form.js";
+import { assertPublishable } from "./publishing.js";
 
 /* The write shapes. Unknown keys are STRIPPED rather than rejected, so the
    admin can PUT a whole record straight back without peeling off `id` and
@@ -46,9 +43,33 @@ export const eventInput = z.object({
 
 /* Both run on the MERGED event, so a PATCH changing only `status` is still
    checked against the form already stored. */
+/* ⚠ Everything the SITE cannot render honestly without. Each of these leaves a
+   visible hole: no photo is a broken image on the card, no venue sends the map
+   to the office address, no summary is a blank card. What is deliberately NOT
+   here is anything with a real "none" — `spots` (uncapped), `programme` (open
+   to all), `kind`, `address` and `coords` (the map falls back to the venue). */
+const EVENT_TO_PUBLISH = [
+  /* ⚠ In the same pass as the rest, not a separate throw before it: an editor
+     publishing a half-written event should be told everything it needs once,
+     rather than fixing the form, saving, and being told about the summary. */
+  {
+    field: "form",
+    label: "Registration form",
+    message:
+      "Add at least one question before publishing — a live event with nowhere to register is worse than an unpublished one.",
+  },
+  { field: "kind", label: "Type" },
+  { field: "start", label: "Start time" },
+  { field: "end", label: "End time" },
+  { field: "venue", label: "Venue" },
+  { field: "summary", label: "Summary" },
+  { field: "details", label: "About this event" },
+  { field: "img", label: "Image" },
+];
+
 export const assertEventIsSound = (event) => {
   assertFormIsCoherent(event.form ?? []);
-  assertFormPresentWhenPublished(event);
+  assertPublishable(event, EVENT_TO_PUBLISH);
 };
 
 export const blogInput = z.object({
@@ -66,6 +87,16 @@ export const blogInput = z.object({
   html: z.string().max(500_000, "That post is too long").default("").transform(sanitize),
 });
 
+/* ⚠ `img` is NOT here: a post without one falls back to its programme's mark,
+   which is a designed state rather than a hole. */
+const BLOG_TO_PUBLISH = [
+  { field: "date", label: "Date" },
+  { field: "excerpt", label: "Excerpt" },
+  { field: "html", label: "The post itself" },
+];
+
+export const assertBlogIsSound = (blog) => assertPublishable(blog, BLOG_TO_PUBLISH);
+
 export const episodeInput = z.object({
   slug: f.slug,
   countries: f.countries,
@@ -73,6 +104,9 @@ export const episodeInput = z.object({
 
   title: z.string().trim().min(1, "A title is required").max(200),
   author: f.text(120),
+  /* This episode's own write-up. Optional — an episode without one shows the
+     show's blurb instead, which is what every episode did before this. */
+  description: f.longText(2000),
   programme: f.programme,
   audio: f.url,
   video: f.youtubeUrl,
@@ -128,7 +162,18 @@ const promoRange = ({ startsAt, endsAt }) => {
   return "with no end date";
 };
 
+/* ⚠ `mark`, `eyebrow` and `dismiss` are NOT here — the heading can stand
+   alone, and an empty dismiss label deliberately hides that button. `cta` is
+   the field name because the CMS edits the label and the link as one control. */
+const PROMO_TO_PUBLISH = [
+  { field: "heading", label: "Heading" },
+  { field: "body", label: "Body" },
+  { field: "cta", label: "Button label", read: (p) => p.cta?.label },
+];
+
 export const assertPromoWindow = async (promo, req) => {
+  assertPublishable(promo, PROMO_TO_PUBLISH);
+
   const { startsAt, endsAt } = promo;
   if (startsAt && endsAt && startsAt > endsAt) {
     throw badRequest("The promo window ends before it starts", [
@@ -206,6 +251,11 @@ export const userInput = z.object({
    a PATCH setting one is checked against the other rather than against nothing.
    Both errors report on `audio`, which is the field the CMS's media control
    is bound to. */
+/* ⚠ `length` and `cover` are NOT here — the card hides a missing running time
+   and falls back to the show's artwork. `description` is, because the episode
+   page has nothing else to say about the episode. */
+const EPISODE_TO_PUBLISH = [{ field: "description", label: "About this episode" }];
+
 export function assertEpisodePlayable(doc) {
   if (!doc.audio && !doc.video) {
     throw badRequest("An episode needs an audio or a video URL", [
@@ -217,6 +267,7 @@ export function assertEpisodePlayable(doc) {
       { field: "audio", message: "Clear one of them — an episode plays one way." },
     ]);
   }
+  assertPublishable(doc, EPISODE_TO_PUBLISH);
 }
 
 export const applyFormInput = z.object({

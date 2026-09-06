@@ -195,6 +195,34 @@ const MINIMAL_FORM = [
   { key: "email", type: "email", label: "E-mail", required: true },
 ];
 
+/* ⚠ What a PUBLISHED record has to carry. The API refuses to publish one with
+   a hole in it (validators/publishing.js), so a fixture that goes live spreads
+   these — otherwise every check below would really be a test of that rule.
+   A DRAFT fixture deliberately does not, since half-written is a legal state. */
+const LIVE_EVENT = {
+  kind: "Community",
+  start: "18:00",
+  end: "20:00",
+  venue: "Iwan Hall",
+  summary: "A gathering.",
+  details: "The longer version of what happens.",
+  img: "https://example.com/event.jpg",
+};
+
+const LIVE_BLOG = {
+  date: "2026-05-01",
+  excerpt: "A line about the post.",
+  html: "<p>The body.</p>",
+};
+
+const LIVE_EPISODE = { description: "What this episode is about." };
+
+const LIVE_PROMO = {
+  heading: "Something is on",
+  body: "A few words about it.",
+  cta: { label: "Go", to: "/events" },
+};
+
 console.log("\nevents");
 
 await check("an event with a bad date is rejected field by field", async () => {
@@ -210,6 +238,7 @@ await check("creating a published Canadian event", async () => {
   const { status, body } = await call("POST", "/api/admin/events", {
     token,
     body: {
+      ...LIVE_EVENT,
       slug: "toronto-meetup",
       title: "Toronto Meetup",
       countries: ["ca"],
@@ -260,8 +289,10 @@ await check("the public event matches the site's content shape", async () => {
   assert.equal(body.country, "ca");
   /* The agenda comes back as PAIRS, the way EventDetail renders it. */
   assert.deepEqual(body.agenda, [["18:30", "Doors open"]]);
-  /* Absent values are omitted rather than sent as nulls. */
-  assert.equal("img" in body, false);
+  /* Absent values are omitted rather than sent as nulls. ⚠ `address` rather
+     than `img`: a published event must now carry a photo, so the field that
+     proves the point has to be one this event genuinely does not set. */
+  assert.equal("address" in body, false);
 });
 
 await check("an event for Canada does not show for India", async () => {
@@ -273,6 +304,7 @@ await check("a global event shows for both countries", async () => {
   await call("POST", "/api/admin/events", {
     token,
     body: {
+      ...LIVE_EVENT,
       slug: "global-open-evening",
       title: "Open Evening",
       countries: [],
@@ -351,6 +383,7 @@ await check("⚠ upcoming come first, then past — newest past at the top", asy
     await call("POST", "/api/admin/events", {
       token,
       body: {
+        ...LIVE_EVENT,
         slug,
         title: slug,
         countries: [],
@@ -426,6 +459,7 @@ await check("a past event is served when ?from= reaches back for it", async () =
   await call("POST", "/api/admin/events", {
     token,
     body: {
+      ...LIVE_EVENT,
       slug: "last-month",
       title: "Last month",
       countries: [],
@@ -449,6 +483,58 @@ await check("a past event is served when ?from= reaches back for it", async () =
     !upcoming.body.items.some((e) => e.id === "last-month"),
     "an ended event leaked into the upcoming list"
   );
+});
+
+await check("⚠ a published event needs everything the site draws", async () => {
+  /* Each of these leaves a visible hole on the page — a broken image, a blank
+     card, a map pointing at the office. The list is validators/publishing.js. */
+  const { status, body } = await call("POST", "/api/admin/events", {
+    token,
+    body: {
+      slug: "half-written",
+      title: "Half written",
+      status: "published",
+      date: "2027-04-01",
+      form: MINIMAL_FORM,
+    },
+  });
+  assert.equal(status, 400);
+  assert.deepEqual(body.details.map((d) => d.field).sort(), [
+    "details",
+    "end",
+    "img",
+    "kind",
+    "start",
+    "summary",
+    "venue",
+  ]);
+  assert.ok(/Not published/.test(body.error), body.error);
+});
+
+await check("⚠ the same event saves happily as a DRAFT", async () => {
+  /* Half-written is a normal state — refusing the save would throw it away. */
+  const { status } = await call("POST", "/api/admin/events", {
+    token,
+    body: {
+      slug: "half-written",
+      title: "Half written",
+      date: "2027-04-01",
+      /* ⚠ Carries its form, so the PATCH below is refused for the CONTENT it
+         is missing rather than stopping at the older empty-form rule. */
+      form: MINIMAL_FORM,
+    },
+  });
+  assert.equal(status, 201);
+});
+
+await check("a draft cannot be flipped to published while it has holes", async () => {
+  const { body: list } = await call("GET", "/api/admin/events?q=half-written", { token });
+  const { status, body } = await call("PATCH", `/api/admin/events/${list.items[0].id}`, {
+    token,
+    body: { status: "published" },
+  });
+  assert.equal(status, 400, "the rule did not run on the merged document");
+  assert.ok(body.details.some((d) => d.field === "summary"));
 });
 
 console.log("\nthe registration form");
@@ -487,6 +573,7 @@ await check("an event saves with a registration form", async () => {
   const { status, body } = await call("POST", "/api/admin/events", {
     token,
     body: {
+      ...LIVE_EVENT,
       slug: "fishing-day",
       title: "Fishing Day",
       countries: ["ca"],
@@ -522,6 +609,7 @@ await check("⚠ publishing without a form is refused", async () => {
   const { status, body } = await call("POST", "/api/admin/events", {
     token,
     body: {
+      ...LIVE_EVENT,
       slug: "no-form-event",
       title: "No form",
       countries: [],
@@ -554,7 +642,10 @@ await check("and that draft cannot then be published while empty", async () => {
   const draft = await findEvent("draft-no-form");
   const { status } = await call("PATCH", `/api/admin/events/${draft.id}`, {
     token,
-    body: { status: "published" },
+    body: {
+      ...LIVE_EVENT,
+      status: "published",
+    },
   });
   /* ⚠ The guard has to see the MERGED event — a PATCH carrying only `status`
      says nothing about the form, and checking the patch alone would let this
@@ -643,6 +734,7 @@ await check("a post is stored and served as HTML", async () => {
   await call("POST", "/api/admin/blogs", {
     token,
     body: {
+      ...LIVE_BLOG,
       slug: "a-post",
       title: "A post",
       status: "published",
@@ -662,6 +754,7 @@ await check("script tags and their contents are stripped", async () => {
   await call("POST", "/api/admin/blogs", {
     token,
     body: {
+      ...LIVE_BLOG,
       slug: "nasty",
       title: "Nasty",
       status: "published",
@@ -712,6 +805,7 @@ await check("the podcast serves the show and its episodes together", async () =>
   await call("POST", "/api/admin/episodes", {
     token,
     body: {
+      ...LIVE_EPISODE,
       slug: "coco",
       title: "CoCo",
       status: "published",
@@ -1017,6 +1111,15 @@ await check("a registration reports what is known about its confirmation", async
   assert.equal(row.confirmationSentAt, null);
 });
 
+await check("⚠ a published post needs a date, an excerpt and a body", async () => {
+  const { status, body } = await call("POST", "/api/admin/blogs", {
+    token,
+    body: { slug: "empty-post", title: "Empty", status: "published" },
+  });
+  assert.equal(status, 400);
+  assert.deepEqual(body.details.map((d) => d.field).sort(), ["date", "excerpt", "html"]);
+});
+
 console.log("\npodcast episodes");
 
 /* An episode plays as audio or as video; one of the two has to be there. */
@@ -1040,6 +1143,7 @@ await check("an episode with only a VIDEO url is accepted", async () => {
   const { status, body } = await call("POST", "/api/admin/episodes", {
     token,
     body: {
+      ...LIVE_EPISODE,
       slug: "video-only",
       title: "Video only",
       countries: [],
@@ -1056,6 +1160,7 @@ await check("an episode with only an AUDIO url is accepted", async () => {
   const { status } = await call("POST", "/api/admin/episodes", {
     token,
     body: {
+      ...LIVE_EPISODE,
       slug: "audio-only",
       title: "Audio only",
       countries: [],
@@ -1207,7 +1312,15 @@ await check("a blog detail carries its neighbours and related posts", async () =
   ]) {
     await call("POST", "/api/admin/blogs", {
       token,
-      body: { slug, title: slug, status: "published", date, programme, html: "<p>x</p>" },
+      body: {
+        ...LIVE_BLOG,
+        slug,
+        title: slug,
+        status: "published",
+        date,
+        programme,
+        html: "<p>x</p>",
+      },
     });
   }
 
@@ -1238,6 +1351,47 @@ await check("an episode detail carries number, neighbours and related", async ()
   assert.equal(body.nav.next.id, "audio-only");
   assert.ok(!body.related.some((e) => e.id === "video-only"), "related includes itself");
   assert.ok(body.related.length >= 2);
+});
+
+await check("⚠ an episode's own description is on the DETAIL, not the card", async () => {
+  /* The show's blurb describes the podcast; this describes one episode. It is
+     the heavy field on an episode, so it splits the same way a post's html
+     does — out of every list, and out of the bootstrap. */
+  const { body: list } = await call("GET", "/api/admin/episodes?q=coco", { token });
+  const { status } = await call("PATCH", `/api/admin/episodes/${list.items[0].id}`, {
+    token,
+    body: { description: "Two friends, one microphone,\nand a long argument." },
+  });
+  assert.equal(status, 200);
+
+  const { body: detail } = await call("GET", "/api/podcast/coco");
+  assert.equal(detail.description, "Two friends, one microphone,\nand a long argument.");
+
+  const { body: page } = await call("GET", "/api/podcast?country=in");
+  const card = page.items.find((e) => e.id === "coco");
+  assert.equal("description" in card, false, "the card carries the write-up");
+
+  const { body: boot } = await call("GET", "/api/content?country=in");
+  const booted = (boot.podcast.episodes ?? []).find((e) => e.id === "coco");
+  if (booted) assert.equal("description" in booted, false, "the bootstrap carries it");
+});
+
+await check("an episode without one simply has no description key", async () => {
+  /* ⚠ Written straight to the database: the admin routes will not publish an
+     episode without a write-up any more. Episodes published BEFORE that rule
+     still exist and still have to serve, which is what this pins. */
+  const { PodcastEpisode } = await import("../src/models/Podcast.js");
+  await PodcastEpisode.create({
+    slug: "legacy-episode",
+    title: "Published before write-ups existed",
+    countries: [],
+    status: "published",
+    audio: "https://example.com/legacy.mp3",
+    order: 99,
+  });
+
+  const { body } = await call("GET", "/api/podcast/legacy-episode");
+  assert.equal("description" in body, false, "an empty write-up was serialized");
 });
 
 await check("⚠ the ADMIN episode list reverses the site's running order", async () => {
@@ -1326,11 +1480,10 @@ console.log("\none published promo at a time");
 /* ⚠ The fixtures above are still in the database and published, so every promo
    written here is scoped to a country nothing else uses. */
 const promoBody = (slug, extra = {}) => ({
+  ...LIVE_PROMO,
   slug,
   name: slug,
   countries: ["in"],
-  heading: "x",
-  cta: { label: "Go", to: "/" },
   ...extra,
 });
 
@@ -1483,7 +1636,10 @@ await check("publishing a DRAFT into a taken window is refused", async () => {
   const { body: list } = await call("GET", "/api/admin/promos?q=promo-draft", { token });
   const { status } = await call("PATCH", `/api/admin/promos/${list.items[0].id}`, {
     token,
-    body: { status: "published" },
+    body: {
+      ...LIVE_PROMO,
+      status: "published",
+    },
   });
   assert.equal(status, 400, "the check ran on the merged document, or should have");
 });
@@ -1501,7 +1657,10 @@ await check("the window is free again once the live promo is unpublished", async
   });
   const { status } = await call("PATCH", `/api/admin/promos/${drafts.items[0].id}`, {
     token,
-    body: { status: "published" },
+    body: {
+      ...LIVE_PROMO,
+      status: "published",
+    },
   });
   assert.equal(status, 200);
 });
@@ -1514,6 +1673,7 @@ await (await import("../src/models/Promo.js")).Promo.deleteMany({});
 await call("POST", "/api/admin/promos", {
   token,
   body: {
+    ...LIVE_PROMO,
     slug: "ca-promo",
     name: "Canada",
     countries: ["ca"],
@@ -1604,6 +1764,7 @@ await check("a global blog exists to be found", async () => {
   const { status } = await call("POST", "/api/admin/blogs", {
     token,
     body: {
+      ...LIVE_BLOG,
       slug: "everywhere-post",
       title: "Everywhere post",
       countries: [],
@@ -2602,6 +2763,7 @@ await check("?from= filters upcoming events by the visitor's day", async () => {
   await call("POST", "/api/admin/events", {
     token,
     body: {
+      ...LIVE_EVENT,
       slug: "long-past",
       title: "Long past",
       countries: [],

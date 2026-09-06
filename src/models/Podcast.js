@@ -25,6 +25,13 @@ const episodeSchema = new mongoose.Schema(
     title: { type: String, required: [true, "A title is required"], trim: true },
     author: { type: String, trim: true, default: "" },
 
+    /* What THIS episode is about, in the editor's own words.
+
+       ⚠ Not the show's blurb, which lives on the show and describes the
+       podcast as a whole. An episode falls back to that one when it has none
+       of its own, so this is optional and blank is a real answer. */
+    description: { type: String, trim: true, default: "" },
+
     /* ⚠ Neither is required on its own, but an episode needs ONE of them —
        enforced on the merged document in validators/content.js, since a PATCH
        can clear one without mentioning the other. */

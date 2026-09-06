@@ -74,17 +74,7 @@ export function assertFormIsCoherent(form = []) {
   }
 }
 
-/* ⚠ A PUBLISHED event must have somewhere to register; a draft need not, since
-   half a form is a normal state and refusing the save would throw the work
-   away. Guarded at the moment it starts to matter. */
-export function assertFormPresentWhenPublished(event) {
-  if (event.status === "published" && (event.form ?? []).length === 0) {
-    throw badRequest("This event has no registration form", [
-      {
-        field: "form",
-        message:
-          "Add at least one question before publishing — a live event with nowhere to register is worse than an unpublished one.",
-      },
-    ]);
-  }
-}
+/* ⚠ The form is now one of the things validators/publishing.js checks for an
+   event, so that everything a publish is missing is reported in ONE error. The
+   rule is unchanged — a published event must have somewhere to register, a
+   draft need not — it just lives beside the rest of them. */

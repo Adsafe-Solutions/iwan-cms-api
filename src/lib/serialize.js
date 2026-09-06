@@ -118,6 +118,15 @@ export const publicEpisode = (doc) =>
     publishedOn: doc.publishedOn,
   });
 
+/* ⚠ The DETAIL only — `description` is an episode's write-up and is the one
+   heavy field on an episode, so it stays out of the card the listings and the
+   bootstrap carry. Same split as a blog's `html`. */
+export const publicEpisodeDetail = (doc) =>
+  compact({
+    ...publicEpisode(doc),
+    description: doc.description,
+  });
+
 /* The show's own fields. The paged route carries its episodes as `items`, so it
    takes this rather than publicShow, which would add an empty `episodes`. */
 export const publicShowMeta = (show) =>
@@ -210,6 +219,7 @@ export const adminEpisode = (doc) => ({
   cover: doc.cover,
   order: doc.order ?? 0,
   publishedOn: doc.publishedOn ?? "",
+  description: doc.description ?? "",
 });
 
 export const adminShow = (doc) => ({

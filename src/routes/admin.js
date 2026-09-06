@@ -26,6 +26,7 @@ import {
   applyFormInput,
   assertApplyFormIsSound,
   assertEventIsSound,
+  assertBlogIsSound,
   assertPromoWindow,
   blogInput,
   episodeInput,
@@ -98,6 +99,7 @@ router.use(
     serialize: adminBlog,
     sort: { date: -1, updatedAt: -1 },
     searchFields: ["title", "slug", "excerpt"],
+    beforeSave: assertBlogIsSound,
   })
 );
 

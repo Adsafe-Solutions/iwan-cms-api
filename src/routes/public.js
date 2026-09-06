@@ -13,6 +13,7 @@ import {
   publicEvent,
   publicEventCard,
   publicEpisode,
+  publicEpisodeDetail,
   publicPromo,
   publicShow,
   publicShowMeta,
@@ -373,7 +374,7 @@ router.get(
     const index = siblings.findIndex((d) => d.slug === episode.slug);
     cacheable(res);
     res.json({
-      ...publicEpisode(episode),
+      ...publicEpisodeDetail(episode),
       /* Its place in the running order — the badge number. The site used to
          derive this from the bootstrap's first page, which broke past it. */
       ...(index >= 0 ? { number: index + 1 } : {}),
