@@ -79,8 +79,10 @@ router.use(
     model: Event,
     schema: eventInput,
     serialize: adminEvent,
-    /* Soonest first — the ones an editor is most likely to be touching. */
-    sort: { date: 1 },
+    /* ⚠ Newest first, NOT the site's upcoming-first order. The admin list
+       spans every event ever run, so date-ascending opened on the oldest one
+       an editor will never touch again. */
+    sort: { date: -1, updatedAt: -1 },
     searchFields: ["title", "slug", "venue"],
     /* Runs on the MERGED event, so a PATCH flipping only `status` is still
        checked against the form already stored. */
@@ -105,7 +107,9 @@ router.use(
     model: PodcastEpisode,
     schema: episodeInput,
     serialize: adminEpisode,
-    sort: { order: 1, createdAt: 1 },
+    /* Highest running order first — the latest episode. The SITE still lists
+       them ascending, which is what `order` is for; this is only the desk. */
+    sort: { order: -1, createdAt: -1 },
     searchFields: ["title", "slug", "author"],
     beforeSave: assertEpisodePlayable,
   })
@@ -276,7 +280,7 @@ router.use("/users", requireAdmin);
 router.get(
   "/users",
   wrap(async (_req, res) => {
-    const users = await User.find().sort({ createdAt: 1 }).lean();
+    const users = await User.find().sort({ createdAt: -1 }).lean();
     res.json({ items: users.map(adminUser), total: users.length });
   })
 );

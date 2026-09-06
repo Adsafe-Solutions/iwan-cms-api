@@ -111,7 +111,9 @@ export function crudRouter({
     validate(schema),
     wrap(async (req, res) => {
       assertCountryScope(req.user, req.body.countries);
-      if (beforeSave) beforeSave(req.body, req);
+      /* ⚠ Awaited: a rule may have to ask the database, as the promo's
+         one-published-promo-per-day check does. */
+      if (beforeSave) await beforeSave(req.body, req);
 
       const doc = await model.create(req.body);
       res.status(201).json(serialize(doc.toObject()));
@@ -130,7 +132,7 @@ export function crudRouter({
 
       const next = partial ? { ...doc.toObject(), ...req.body } : req.body;
       assertCountryScope(req.user, next.countries ?? []);
-      if (beforeSave) beforeSave(next, req);
+      if (beforeSave) await beforeSave(next, req);
 
       /* Assigning onto the loaded document, not findByIdAndUpdate, is what
          runs the schema validators and keeps `updatedAt` honest. */

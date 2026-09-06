@@ -401,6 +401,19 @@ await check("the ordering survives paging across the upcoming/past seam", async 
   assert.equal(new Set(all).size, all.length, "a page repeated an event");
 });
 
+await check("⚠ the ADMIN events list is newest first, not the site's order", async () => {
+  /* Two different questions. The site asks "what is on next"; the desk asks
+     "what did I touch last", and date-ascending opened it on the oldest event
+     ever run. The fixtures above span both sides of today. */
+  const { body } = await call("GET", "/api/admin/events?q=order-&limit=50", { token });
+  const seen = body.items.map((e) => e.slug).filter((slug) => slug.startsWith("order-"));
+  assert.deepEqual(
+    seen,
+    ["order-later", "order-soon", "order-recent-past", "order-older-past"],
+    "the admin events list is not date-descending"
+  );
+});
+
 await check("a past event is served when ?from= reaches back for it", async () => {
   /* /events with from = two months back is how the site shows recently-ended
      events in the same list — the $gte filter is the whole mechanism. */
@@ -1227,6 +1240,16 @@ await check("an episode detail carries number, neighbours and related", async ()
   assert.ok(body.related.length >= 2);
 });
 
+await check("⚠ the ADMIN episode list reverses the site's running order", async () => {
+  /* The site numbers episodes by `order` ascending — episode 01 first, and
+     that is what `order` is for. The desk wants the latest one at the top. */
+  const { body } = await call("GET", "/api/admin/episodes?limit=50", { token });
+  const ours = body.items
+    .map((e) => e.slug)
+    .filter((slug) => ["coco", "video-only", "audio-only"].includes(slug));
+  assert.deepEqual(ours, ["audio-only", "video-only", "coco"]);
+});
+
 console.log("\npromos");
 
 await check("no eligible promo serves null, not an error", async () => {
@@ -1236,19 +1259,21 @@ await check("no eligible promo serves null, not an error", async () => {
 });
 
 await check("a country promo beats a global one", async () => {
-  await call("POST", "/api/admin/promos", {
-    token,
-    body: {
+  /* ⚠ Written STRAIGHT TO THE DATABASE, because the admin routes now refuse to
+     publish two promos whose windows and audiences overlap — which this pair
+     does by construction. The precedence rule is still the resolver's, and
+     still has to hold for documents written before that guard existed. */
+  const { Promo } = await import("../src/models/Promo.js");
+  await Promo.create([
+    {
       slug: "global-promo",
       status: "published",
+      countries: [],
       heading: "Everywhere",
       mark: "promo",
       cta: { label: "Go", to: "/events" },
     },
-  });
-  await call("POST", "/api/admin/promos", {
-    token,
-    body: {
+    {
       slug: "ca-promo",
       status: "published",
       countries: ["ca"],
@@ -1256,7 +1281,7 @@ await check("a country promo beats a global one", async () => {
       mark: "promo",
       cta: { label: "Go", to: "/events" },
     },
-  });
+  ]);
 
   const { body: ca } = await call("GET", "/api/promo?country=ca");
   assert.equal(ca.id, "ca-promo");
@@ -1266,19 +1291,19 @@ await check("a country promo beats a global one", async () => {
 });
 
 await check("a promo outside its window is not served", async () => {
-  await call("POST", "/api/admin/promos", {
-    token,
-    body: {
-      slug: "expired-promo",
-      status: "published",
-      countries: ["in"],
-      heading: "Last",
-      mark: "year",
-      priority: 99,
-      startsAt: "2020-01-01",
-      endsAt: "2020-12-31",
-      cta: { label: "Go", to: "/" },
-    },
+  /* Direct for the same reason: a 2020 promo overlaps the open-ended global
+     one above under the new rule, and this is about the READ side. */
+  const { Promo } = await import("../src/models/Promo.js");
+  await Promo.create({
+    slug: "expired-promo",
+    status: "published",
+    countries: ["in"],
+    heading: "Last",
+    mark: "year",
+    priority: 99,
+    startsAt: "2020-01-01",
+    endsAt: "2020-12-31",
+    cta: { label: "Go", to: "/" },
   });
   const { body } = await call("GET", "/api/promo?country=in");
   assert.equal(body.id, "global-promo");
@@ -1295,6 +1320,197 @@ await check("a backwards promo window is refused", async () => {
     },
   });
   assert.equal(status, 400);
+});
+
+console.log("\none published promo at a time");
+
+/* ⚠ The fixtures above are still in the database and published, so every promo
+   written here is scoped to a country nothing else uses. */
+const promoBody = (slug, extra = {}) => ({
+  slug,
+  name: slug,
+  countries: ["in"],
+  heading: "x",
+  cta: { label: "Go", to: "/" },
+  ...extra,
+});
+
+await check("⚠ a second published promo over the same dates is refused", async () => {
+  const { Promo } = await import("../src/models/Promo.js");
+  await Promo.deleteMany({});
+
+  const first = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-june", {
+      name: "June campaign",
+      status: "published",
+      startsAt: "2027-06-10",
+      endsAt: "2027-06-20",
+    }),
+  });
+  assert.equal(first.status, 201);
+
+  /* Starts inside the first one's window. */
+  const { status, body } = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-clash", {
+      status: "published",
+      startsAt: "2027-06-15",
+      endsAt: "2027-06-25",
+    }),
+  });
+  assert.equal(status, 400);
+  assert.ok(
+    body.error.includes("June campaign"),
+    `the message does not name the promo in the way: ${body.error}`
+  );
+  /* ⚠ No field details — the admin shows a generic toast for those, and this
+     message is the whole point of the refusal. */
+  assert.equal("details" in body, false);
+});
+
+await check("the same dates are fine as a DRAFT", async () => {
+  const { status } = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-draft", {
+      status: "draft",
+      /* ⚠ Inside June's window but clear of "promo-after" below, so the last
+         check in this block tests the thing it says it does. */
+      startsAt: "2027-06-15",
+      endsAt: "2027-06-18",
+    }),
+  });
+  assert.equal(status, 201);
+});
+
+await check("a window that starts the day after is fine", async () => {
+  const { status } = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-after", {
+      status: "published",
+      startsAt: "2027-06-21",
+      endsAt: "2027-06-30",
+    }),
+  });
+  assert.equal(status, 201);
+});
+
+await check("⚠ the last day of one window still collides", async () => {
+  const { status } = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-edge", {
+      status: "published",
+      startsAt: "2027-06-20",
+      endsAt: "2027-06-22",
+    }),
+  });
+  assert.equal(status, 400, "the window is inclusive at both ends");
+});
+
+await check("another COUNTRY over the same dates is fine", async () => {
+  const { status } = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-ca", {
+      countries: ["ca"],
+      status: "published",
+      startsAt: "2027-06-15",
+      endsAt: "2027-06-25",
+    }),
+  });
+  assert.equal(status, 201);
+});
+
+await check("⚠ a global promo collides with a country one", async () => {
+  /* Empty countries means everywhere, so the same visitor would be eligible
+     for both — which is the thing being prevented, not a country pairing. */
+  const { status, body } = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-global", {
+      countries: [],
+      status: "published",
+      startsAt: "2027-06-15",
+      endsAt: "2027-06-25",
+    }),
+  });
+  assert.equal(status, 400);
+  assert.ok(body.error.includes("June campaign"));
+});
+
+await check("a promo with NO window collides with everything published", async () => {
+  const { status } = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-forever", { status: "published" }),
+  });
+  assert.equal(status, 400, "an open-ended promo runs on every date");
+});
+
+await check("⚠ a promo does not collide with ITSELF on save", async () => {
+  const { body: list } = await call("GET", "/api/admin/promos?q=promo-june", { token });
+  const id = list.items[0].id;
+
+  const patched = await call("PATCH", `/api/admin/promos/${id}`, {
+    token,
+    body: { heading: "Renamed" },
+  });
+  assert.equal(patched.status, 200, "editing the live promo was refused");
+
+  /* ⚠ PUT carries no id in its body, so self-exclusion has to come from the
+     route — this is the case that catches it going through the body. */
+  const put = await call("PUT", `/api/admin/promos/${id}`, {
+    token,
+    body: promoBody("promo-june", {
+      name: "June campaign",
+      status: "published",
+      startsAt: "2027-06-10",
+      endsAt: "2027-06-20",
+    }),
+  });
+  assert.equal(put.status, 200, "replacing the live promo was refused");
+});
+
+await check("publishing a DRAFT into a taken window is refused", async () => {
+  const { body: list } = await call("GET", "/api/admin/promos?q=promo-draft", { token });
+  const { status } = await call("PATCH", `/api/admin/promos/${list.items[0].id}`, {
+    token,
+    body: { status: "published" },
+  });
+  assert.equal(status, 400, "the check ran on the merged document, or should have");
+});
+
+await check("the window is free again once the live promo is unpublished", async () => {
+  const { body: list } = await call("GET", "/api/admin/promos?q=promo-june", { token });
+  const off = await call("PATCH", `/api/admin/promos/${list.items[0].id}`, {
+    token,
+    body: { status: "draft" },
+  });
+  assert.equal(off.status, 200);
+
+  const { body: drafts } = await call("GET", "/api/admin/promos?q=promo-draft", {
+    token,
+  });
+  const { status } = await call("PATCH", `/api/admin/promos/${drafts.items[0].id}`, {
+    token,
+    body: { status: "published" },
+  });
+  assert.equal(status, 200);
+});
+
+/* ⚠ Back to ONE live promo, for Canada — the bootstrap check further down
+   reads the promo Canada is served. The block above is cleared first: its
+   fixtures are published in 2027, and an open-ended promo overlaps every date
+   there is, which is the rule this whole section just established. */
+await (await import("../src/models/Promo.js")).Promo.deleteMany({});
+await call("POST", "/api/admin/promos", {
+  token,
+  body: {
+    slug: "ca-promo",
+    name: "Canada",
+    countries: ["ca"],
+    status: "published",
+    heading: "Canada",
+    mark: "promo",
+    cta: { label: "Go", to: "/events" },
+  },
 });
 
 console.log("\ncountry scoping");

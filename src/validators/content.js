@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ROLES } from "../models/User.js";
+import { Promo } from "../models/Promo.js";
 import * as f from "./fields.js";
 import { badRequest } from "../lib/errors.js";
 import { sanitize } from "../lib/html.js";
@@ -110,11 +111,64 @@ export const promoInput = z.object({
   priority: z.number().int().default(0),
 });
 
-export const assertPromoWindow = ({ startsAt, endsAt }) => {
+/* Two audiences clash unless they are different countries. An EMPTY list means
+   everywhere, so a global promo shares its audience with every country one. */
+const sameAudience = (a = [], b = []) =>
+  a.length === 0 || b.length === 0 || a.some((code) => b.includes(code));
+
+/* Inclusive at both ends, and a missing end is open — a promo with no window
+   at all runs from forever until forever, so it overlaps everything. */
+const windowsOverlap = (a, b) =>
+  (!a.startsAt || !b.endsAt || a.startsAt <= b.endsAt) &&
+  (!b.startsAt || !a.endsAt || b.startsAt <= a.endsAt);
+
+const promoRange = ({ startsAt, endsAt }) => {
+  if (startsAt && endsAt) return `from ${startsAt} to ${endsAt}`;
+  if (startsAt) return `from ${startsAt} onwards`;
+  if (endsAt) return `until ${endsAt}`;
+  return "with no end date";
+};
+
+export const assertPromoWindow = async (promo, req) => {
+  const { startsAt, endsAt } = promo;
   if (startsAt && endsAt && startsAt > endsAt) {
     throw badRequest("The promo window ends before it starts", [
       { field: "endsAt", message: "The end date is before the start date" },
     ]);
+  }
+
+  /* ⚠ ONE published promo per day, per audience. Overlapping ones left the
+     SITE to choose between them by priority, which is invisible from the CMS —
+     where both rows say "Published" and only one ever appeared. Refusing the
+     save is what makes that badge mean what it says.
+
+     Drafts are deliberately exempt: writing the next campaign while the
+     current one runs is the normal way to work, and a draft shows to nobody. */
+  if (promo.status !== "published") return;
+
+  /* Read and compared in memory rather than as a Mongo date query: a null end
+     means "open", which no range operator expresses, and a site runs tens of
+     promos in its life, not thousands. */
+  const others = await Promo.find({
+    status: "published",
+    ...(req?.params?.id ? { _id: { $ne: req.params.id } } : {}),
+  })
+    .select("name slug countries startsAt endsAt")
+    .lean();
+
+  const clash = others.find(
+    (other) =>
+      sameAudience(promo.countries, other.countries) && windowsOverlap(promo, other)
+  );
+
+  if (clash) {
+    /* ⚠ No field details on purpose. The admin routes a detail to its field and
+       shows a generic toast; this needs to say WHICH promo and WHEN, so it is
+       raised as a plain message and reaches the toast and the banner whole. */
+    throw badRequest(
+      `“${clash.name || clash.slug}” is already published ${promoRange(clash)}. ` +
+        `Change these dates, save this one as a draft, or unpublish that one.`
+    );
   }
 };
 
