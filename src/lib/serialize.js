@@ -229,7 +229,6 @@ export const adminPromo = (doc) => ({
   dismiss: doc.dismiss,
   startsAt: doc.startsAt ?? "",
   endsAt: doc.endsAt ?? "",
-  priority: doc.priority ?? 0,
 });
 
 /* ⚠ `answers` keeps the label and type each answer was GIVEN under, not the

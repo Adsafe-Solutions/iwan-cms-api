@@ -204,7 +204,6 @@ const mapPromo = (PROMO) => {
       dismiss: PROMO.dismiss ?? "",
       startsAt: "",
       endsAt: "",
-      priority: 0,
     },
   ];
 };

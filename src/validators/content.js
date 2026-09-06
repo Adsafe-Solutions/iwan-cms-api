@@ -108,7 +108,6 @@ export const promoInput = z.object({
 
   startsAt: f.optionalDay,
   endsAt: f.optionalDay,
-  priority: z.number().int().default(0),
 });
 
 /* Two audiences clash unless they are different countries. An EMPTY list means
@@ -138,7 +137,7 @@ export const assertPromoWindow = async (promo, req) => {
   }
 
   /* ⚠ ONE published promo per day, per audience. Overlapping ones left the
-     SITE to choose between them by priority, which is invisible from the CMS —
+     SITE to choose between them by rules invisible from the CMS —
      where both rows say "Published" and only one ever appeared. Refusing the
      save is what makes that badge mean what it says.
 

@@ -121,7 +121,7 @@ router.use(
     model: Promo,
     schema: promoInput,
     serialize: adminPromo,
-    sort: { priority: -1, updatedAt: -1 },
+    sort: { updatedAt: -1 },
     searchFields: ["name", "slug", "heading"],
     /* The one rule the shared schema cannot express, checked on the MERGED
        document so a PATCH moving one end of the window is caught. */

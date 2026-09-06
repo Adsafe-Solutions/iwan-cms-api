@@ -1300,7 +1300,6 @@ await check("a promo outside its window is not served", async () => {
     countries: ["in"],
     heading: "Last",
     mark: "year",
-    priority: 99,
     startsAt: "2020-01-01",
     endsAt: "2020-12-31",
     cta: { label: "Go", to: "/" },
@@ -1367,6 +1366,18 @@ await check("⚠ a second published promo over the same dates is refused", async
   /* ⚠ No field details — the admin shows a generic toast for those, and this
      message is the whole point of the refusal. */
   assert.equal("details" in body, false);
+});
+
+await check("⚠ `priority` is gone — sending one is ignored, not refused", async () => {
+  /* It ordered overlapping promos, and overlapping promos can no longer be
+     published. The admin PUTs a whole record back, so an old one still holding
+     the key has to save rather than 400 — unknown keys are stripped. */
+  const { status, body } = await call("POST", "/api/admin/promos", {
+    token,
+    body: promoBody("promo-priority", { status: "draft", priority: 99 }),
+  });
+  assert.equal(status, 201);
+  assert.equal("priority" in body, false, "priority is still serialized");
 });
 
 await check("the same dates are fine as a DRAFT", async () => {

@@ -171,10 +171,6 @@ const listEpisodes = (req, code, fallbackLimit) =>
     publicEpisode
   );
 
-/* The single promo to show, or null. More than one can be eligible, so the tie
-   is broken deliberately rather than by whatever Mongo returns first: naming
-   this country beats global, then higher `priority`, then most recently
-   edited. */
 async function resolvePromo(code) {
   const today = new Date().toISOString().slice(0, 10);
 
@@ -185,7 +181,7 @@ async function resolvePromo(code) {
       { $or: [{ endsAt: { $in: ["", null] } }, { endsAt: { $gte: today } }] },
     ],
   })
-    .sort({ priority: -1, updatedAt: -1 })
+    .sort({ updatedAt: -1 })
     .lean();
 
   if (candidates.length === 0) return null;

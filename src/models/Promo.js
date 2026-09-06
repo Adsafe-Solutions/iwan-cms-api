@@ -43,15 +43,11 @@ const promoSchema = new mongoose.Schema(
        within a day — fine for a campaign, wrong for anything time-critical. */
     startsAt: dayField(false),
     endsAt: dayField(false),
-
-    /* Higher wins among eligible promos, but a country-specific one already
-       beats a global one regardless. */
-    priority: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
 
-promoSchema.index({ status: 1, countries: 1, priority: -1 });
+promoSchema.index({ status: 1, countries: 1 });
 
 export const Promo = mongoose.model("Promo", promoSchema);
 
