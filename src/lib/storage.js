@@ -11,7 +11,14 @@ import { badRequest } from "./errors.js";
    whether a URL was uploaded or typed. That is what keeps this additive: the
    hotlinked i0.wp.com images keep working untouched. */
 
-export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+/* ⚠ Vercel rejects a request body over 4.5MB BEFORE the function runs, with
+   its own opaque error — multer's limit below would never see it and the CMS
+   would show a platform page instead of a sentence. So the default is under
+   that cap when running there, and stays 10MB on a normal server. */
+const DEFAULT_MAX_MB = process.env.VERCEL ? 4 : 10;
+
+export const MAX_UPLOAD_BYTES =
+  Number(process.env.UPLOAD_MAX_MB || DEFAULT_MAX_MB) * 1024 * 1024;
 
 /* What the browser is allowed to send. The stored file is always webp — see
    below — so this is only about what sharp can be trusted to decode. */

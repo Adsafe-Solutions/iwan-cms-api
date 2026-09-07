@@ -148,6 +148,44 @@ from the database on every request, so deactivating one takes effect at once.
 them before they expire. Worth adding a token version the day these accounts
 protect more than marketing copy.
 
+## Deploying to Vercel
+
+`api/index.js` is the entrypoint; `vercel.json` rewrites every path to it. The
+project needs no build step — Vercel installs and invokes the function.
+
+⚠ **`src/server.js` is not the entrypoint and cannot be.** It exports nothing
+for a platform to call, opens a port, and ends in `process.exit(1)` on a
+configuration problem — a crashed function on every request, whatever the
+environment holds. The two entrypoints share `createApp()`; only the way they
+start differs. Deleting either breaks one host.
+
+Four things the platform makes different, all handled in `api/index.js`:
+
+- **The connection is opened on the first request, not at boot**, and cached
+  for the life of the instance (`connectDbOnce` in `db.js`) with
+  `maxPoolSize: 1`. Many instances run at once, and one pool each is how an
+  Atlas connection cap gets eaten.
+- **Nothing throws at module scope.** A missing variable is served as a 503
+  naming nothing, with the reason in the log.
+- **Atlas Network Access must allow `0.0.0.0/0`.** A function's egress IP is
+  not fixed, unlike a Render service's.
+- **The function runs in `bom1` (Mumbai), beside the database.** The cluster is
+  an M0 in AWS `ap-south-1`, which its own SRV hostname says out loud
+  (`…-aws-aps1-…-m0-…`). ⚠ Region is chosen for the DATABASE, not the visitor:
+  `/api/content` makes several queries, so each one pays the round trip twice
+  over from a distant region. Vercel's default `iad1` puts Washington between
+  a Bangalore visitor and a Mumbai database.
+- **A request body over 4.5MB is rejected before the function runs**, so
+  `MAX_UPLOAD_BYTES` drops to 4MB when `VERCEL` is set. The CMS checks the same
+  limit in the browser (`VITE_MAX_UPLOAD_MB`) so an oversized image is refused
+  with a sentence rather than a platform error page.
+
+⚠ **Rate limiting weakens.** `express-rate-limit` counts in memory, and every
+instance keeps its own, so the public-form limits stop being a global count.
+Turnstile still gates every public form in front of this API, so the limiter is
+the second line rather than the only one — but if it has to be exact, it needs
+a shared store.
+
 ## Deploying to Render
 
 Build `npm ci`, start `npm start`, health check path `/health`. Set `NODE_ENV`,
