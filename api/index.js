@@ -71,6 +71,13 @@ export default async function handler(req, res) {
       JSON.stringify({
         error: "The API could not start",
         reason: String(err?.message ?? err).slice(0, 300),
+        /* ⚠ Reported even when startup FAILED, which is the only moment it is
+           hard to find out: `/health` cannot answer if the app never built.
+           Two questions in one field — which Node is really running (the
+           dashboard shows the version a build was made with, not always the
+           one executing), and whether this deployment is the newest one at
+           all: an older build has no `node` key here to print. */
+        node: process.version,
       })
     );
   }
