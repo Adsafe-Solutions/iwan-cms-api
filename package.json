@@ -6,7 +6,7 @@
   "description": "CMS API for iwan.community — events, blogs, podcasts and promos, per country",
   "main": "src/server.js",
   "engines": {
-    "node": "22.x"
+    "node": ">=22.12"
   },
   "scripts": {
     "dev": "node --watch src/server.js",

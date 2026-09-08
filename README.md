@@ -159,6 +159,13 @@ configuration problem — a crashed function on every request, whatever the
 environment holds. The two entrypoints share `createApp()`; only the way they
 start differs. Deleting either breaks one host.
 
+⚠ **Node 22.12 or newer, and the floor is not ours.** `sanitize-html` is
+CommonJS and `require()`s `htmlparser2`, which is ESM-only — a combination that
+only runs from Node 22.12, where `require(esm)` landed. Its own package.json
+says `engines: >=22.12`. An older Node throws while the module loads, before
+any route runs, so EVERY path fails identically. Vercel's Node version is a
+project setting, not a repo one: Settings → Node.js Version → 24.x.
+
 Four things the platform makes different, all handled in `api/index.js`:
 
 - **The connection is opened on the first request, not at boot**, and cached
