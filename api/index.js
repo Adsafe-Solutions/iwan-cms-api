@@ -24,10 +24,6 @@ try {
 
 const app = createApp();
 
-/* Runs once per cold start, after the first request opens the connection.
-   ⚠ Logged rather than thrown, exactly as the server does: a default form that
-   could not be written is worth shouting about, not a reason to refuse every
-   other route. */
 let seeded = false;
 const ensureSeeded = async () => {
   if (seeded) return;
