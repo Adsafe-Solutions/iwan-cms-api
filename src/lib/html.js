@@ -1,4 +1,8 @@
-import sanitizeHtml from "sanitize-html";
+/* ⚠ The BUNDLE, not the package — see scripts/vendor-sanitizer.mjs. Same
+   sanitize-html, with htmlparser2 inlined at build time, because Vercel's
+   function runtime disables Node's require(esm) and the package cannot load
+   there otherwise. Behaviour is unchanged; only the import path is. */
+import sanitizeHtml from "./vendor/sanitize-html.mjs";
 
 /* Posts are stored as HTML and rendered with `dangerouslySetInnerHTML`.
 

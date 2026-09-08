@@ -159,6 +159,19 @@ configuration problem — a crashed function on every request, whatever the
 environment holds. The two entrypoints share `createApp()`; only the way they
 start differs. Deleting either breaks one host.
 
+⚠ **The sanitizer is imported from a COMMITTED BUNDLE**, not from
+`node_modules` — `src/lib/vendor/sanitize-html.mjs`, built by
+`npm run vendor:sanitizer`. Vercel's function runtime launches node with
+`--no-experimental-require-module` in `process.execArgv`, which disables
+`require(esm)` and overrides `NODE_OPTIONS`; `sanitize-html` is CommonJS and
+requires the ESM-only `htmlparser2`, so it cannot load there at all — every
+route dies at module load, including ones that sanitise nothing. Bundling
+resolves that import at build time. Rolling the dependency back instead would
+have reintroduced a `javascript:` bypass or GHSA-jxwj-j7wr-gfrw, and pinning
+htmlparser2 back to 10.x breaks the RCDATA decoding 2.17.7 assumes — both
+measured, not guessed. ⚠ **Re-run `npm run vendor:sanitizer` whenever
+sanitize-html is upgraded**; the smoke suite fails if the two drift.
+
 ⚠ **Node 22.12 or newer, and the floor is not ours.** `sanitize-html` is
 CommonJS and `require()`s `htmlparser2`, which is ESM-only — a combination that
 only runs from Node 22.12, where `require(esm)` landed. Its own package.json

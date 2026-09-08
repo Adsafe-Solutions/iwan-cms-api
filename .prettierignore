@@ -1,0 +1,3 @@
+# Generated — a 400KB bundle of somebody else's code, rewritten by
+# `npm run vendor:sanitizer`. Formatting it would only make the diff bigger.
+src/lib/vendor/

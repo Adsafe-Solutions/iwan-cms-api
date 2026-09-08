@@ -750,6 +750,38 @@ await check("a post is stored and served as HTML", async () => {
 /* ⚠ The whole reason sanitising lives on the write path: what comes back out
    is rendered with dangerouslySetInnerHTML. If any of these survive, that is a
    stored XSS on every visitor to the post. */
+await check("⚠ the vendored sanitizer matches the installed sanitize-html", async () => {
+  /* The bundle is committed (see scripts/vendor-sanitizer.mjs), so bumping the
+     dependency without re-running `npm run vendor:sanitizer` would leave the
+     API sanitising with the OLD code — silently, and on the one control that
+     stands between a compromised CMS account and stored XSS. */
+  const { readFile } = await import("node:fs/promises");
+  const { SANITIZE_HTML_VERSION } = await import("../src/lib/vendor/sanitize-html.mjs");
+  const installed = JSON.parse(
+    await readFile("node_modules/sanitize-html/package.json", "utf8")
+  ).version;
+
+  assert.equal(
+    SANITIZE_HTML_VERSION,
+    installed,
+    `the bundle is sanitize-html@${SANITIZE_HTML_VERSION} but ${installed} is installed — run: npm run vendor:sanitizer`
+  );
+});
+
+await check("⚠ the two bypasses the current sanitize-html fixes stay fixed", async () => {
+  /* Both are why the version cannot be rolled back to dodge Vercel's runtime:
+     a zero-padded numeric reference hiding `javascript:` (fixed in 2.17.2) and
+     the `</textarea/>` mutation XSS of GHSA-jxwj-j7wr-gfrw (fixed in 2.17.7). */
+  const { sanitize } = await import("../src/lib/html.js");
+
+  assert.ok(
+    !/javascript:/i.test(sanitize('<a href="&#0000106avascript:alert(1)">x</a>'))
+  );
+  assert.ok(
+    !/<script/i.test(sanitize("<textarea></textarea/><script>alert(1)</script>"))
+  );
+});
+
 await check("script tags and their contents are stripped", async () => {
   await call("POST", "/api/admin/blogs", {
     token,

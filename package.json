@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "CMS API for iwan.community — events, blogs, podcasts and promos, per country",
+  "description": "CMS API for iwan.community \u2014 events, blogs, podcasts and promos, per country",
   "main": "src/server.js",
   "engines": {
     "node": "24.x"
@@ -18,7 +18,8 @@
     "format:check": "prettier --check .",
     "smoke": "node scripts/smoke.js",
     "dev:memory": "node scripts/dev-memory.js",
-    "migrate:blog-html": "node scripts/migrate-blog-html.js"
+    "migrate:blog-html": "node scripts/migrate-blog-html.js",
+    "vendor:sanitizer": "node scripts/vendor-sanitizer.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1123.0",
@@ -38,6 +39,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "mongodb-memory-server": "^11.2.0",
     "prettier": "3.9.6"
   }
