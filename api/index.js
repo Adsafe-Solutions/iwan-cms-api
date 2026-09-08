@@ -6,58 +6,74 @@
    (FUNCTION_INVOCATION_FAILED), whatever the environment holds. The two
    entrypoints share `createApp()` and differ only in how they start.
 
-   ⚠ Nothing here throws at module scope. A missing variable used to kill the
-   process; here it would poison the whole instance, so it is caught and served
-   as a 503 that says which one — the log names it, the response does not. */
-import { CONFIG, assertConfig } from "../src/config.js";
-import { connectDbOnce } from "../src/db.js";
-import { createApp } from "../src/app.js";
-import { ensureDefaultApplyForms } from "../src/lib/applyForms.js";
+   ⚠ NOTHING IS IMPORTED AT MODULE SCOPE except this file's own guards. A throw
+   while a module loads — a native binary that will not load in a bundled
+   function, a missing dependency, a bad env read — happens before any handler
+   runs, so the platform reports a crash and nothing else: no message, no
+   stack, the same opaque 500 on every route including ones that touch none of
+   it. Importing inside the handler turns all of that into a 503 that says
+   which module failed and why, in the response and in the log. */
 
-let configProblem = null;
-try {
-  assertConfig();
-} catch (err) {
-  configProblem = err;
-  console.error("[iwan-cms-api] bad configuration:", err.message);
+let appPromise = null;
+
+/* Loaded once per instance and remembered. A failure is NOT remembered: the
+   next request retries, so a cold start that raced a slow dependency does not
+   poison the instance for its whole life. */
+async function loadApp() {
+  if (!appPromise) {
+    appPromise = (async () => {
+      const { assertConfig } = await import("../src/config.js");
+      const { connectDbOnce } = await import("../src/db.js");
+      const { createApp } = await import("../src/app.js");
+      const { ensureDefaultApplyForms } = await import("../src/lib/applyForms.js");
+
+      assertConfig();
+      await connectDbOnce();
+
+      /* ⚠ Logged rather than thrown, exactly as the server does: a default
+         form that could not be written is worth shouting about, not a reason
+         to refuse every other route. */
+      try {
+        const created = await ensureDefaultApplyForms();
+        if (created.length) {
+          console.log(
+            `[iwan-cms-api] created default application forms: ${created.join(", ")}`
+          );
+        }
+      } catch (err) {
+        console.error(
+          "[iwan-cms-api] could not ensure the default application forms:",
+          err.message
+        );
+      }
+
+      return createApp();
+    })().catch((err) => {
+      appPromise = null;
+      throw err;
+    });
+  }
+  return appPromise;
 }
 
-const app = createApp();
-
-let seeded = false;
-const ensureSeeded = async () => {
-  if (seeded) return;
-  seeded = true;
-  try {
-    const created = await ensureDefaultApplyForms();
-    if (created.length) {
-      console.log(
-        `[iwan-cms-api] created default application forms: ${created.join(", ")}`
-      );
-    }
-  } catch (err) {
-    console.error("[iwan-cms-api] could not ensure the default application forms:", err);
-  }
-};
-
-/* ⚠ In FRONT of the app, so no route can run against a closed connection. The
-   long-lived server gets this for free by connecting before it listens. */
 export default async function handler(req, res) {
-  if (configProblem) {
-    res.statusCode = 503;
-    res.setHeader("content-type", "application/json");
-    return res.end(JSON.stringify({ error: "The API is not configured" }));
-  }
-
+  let app;
   try {
-    await connectDbOnce();
+    app = await loadApp();
   } catch (err) {
-    console.error(`[iwan-cms-api] database unreachable (${CONFIG.env}):`, err.message);
+    /* The whole point of this file: say what happened. The log carries the
+       stack, the response carries the sentence — which names a module or a
+       variable, never a value. */
+    console.error("[iwan-cms-api] failed to start:", err);
     res.statusCode = 503;
     res.setHeader("content-type", "application/json");
-    return res.end(JSON.stringify({ error: "The database is unreachable" }));
+    return res.end(
+      JSON.stringify({
+        error: "The API could not start",
+        reason: String(err?.message ?? err).slice(0, 300),
+      })
+    );
   }
 
-  await ensureSeeded();
   return app(req, res);
 }

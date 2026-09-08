@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import sharp from "sharp";
 import { CONFIG, uploadsEnabled } from "../config.js";
 import { badRequest } from "./errors.js";
 
@@ -30,6 +29,24 @@ export const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/a
    means nobody can ever put one in the CMS again. `withoutEnlargement` leaves
    a smaller image alone rather than blowing it up into mush. */
 const MAX_EDGE = 1600;
+
+/* ⚠ Imported ON USE, not at the top of the file.
+
+   sharp is a NATIVE module — it loads a platform-specific binary at import —
+   and this file is reached from app.js through the uploads route, so a top
+   import runs on every request the API serves. On a normal server that costs a
+   little boot time. In a bundled serverless function, where the tracer can
+   miss a native binary, it means an image encoder failing to load takes down
+   `/health` and every content route with it, as one opaque crash.
+
+   Loaded once and remembered: an upload pays for it, nothing else does, and a
+   failure is reported by the route that actually needed it. */
+let sharpModule = null;
+
+const loadSharp = async () => {
+  if (!sharpModule) sharpModule = (await import("sharp")).default;
+  return sharpModule;
+};
 
 let client = null;
 
@@ -82,6 +99,7 @@ export async function storeImage(buffer, mimetype = "") {
        just claims; sharp failing to decode is what proves it is not an image.
        `rotate()` first applies the EXIF orientation, which is dropped with the
        rest of the metadata — without it, phone photos come out sideways. */
+    const sharp = await loadSharp();
     const image = sharp(buffer, { failOn: "error" }).rotate();
     const meta = await image.metadata();
 
