@@ -63,6 +63,13 @@ export function createApp() {
     res.status(state === "connected" ? 200 : 503).json({
       ok: state === "connected",
       db: state,
+      /* ⚠ Which Node is actually running this, which is not always the one the
+         dashboard says: a redeployed build keeps the version it was built
+         with, and `engines` in package.json outranks the platform's setting.
+         `sanitize-html` needs >= 22.12 (it requires an ESM-only htmlparser2),
+         and a host on 22.11 fails every route with an error that names neither
+         version. One request answers it now. */
+      node: process.version,
       env: CONFIG.env,
       uptime: Math.round(process.uptime()),
     });
