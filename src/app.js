@@ -9,6 +9,8 @@ import registerRoutes from "./routes/register.js";
 import formRoutes from "./routes/forms.js";
 import adminRoutes from "./routes/admin.js";
 import authRoutes from "./routes/auth.js";
+import webhookRoutes from "./routes/webhooks.js";
+import unsubscribeRoutes from "./routes/unsubscribe.js";
 import { errorHandler, notFoundHandler } from "./middleware/error.js";
 
 export function createApp() {
@@ -21,9 +23,12 @@ export function createApp() {
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
 
-  /* This API renders no HTML, so CSP has nothing to protect; the transport and
-     sniffing headers stay on. crossOriginResourcePolicy is relaxed because the
-     public site is a different origin and "same-origin" would block it. */
+  /* ⚠ One route renders HTML — the unsubscribe page — and it sets its OWN,
+     tighter CSP rather than turning one on here: a policy wide enough for every
+     JSON route is not a policy, and that page fetches nothing at all. The
+     transport and sniffing headers stay on. crossOriginResourcePolicy is
+     relaxed because the public site is a different origin and "same-origin"
+     would block it. */
   app.use(
     helmet({
       contentSecurityPolicy: false,
@@ -48,6 +53,13 @@ export function createApp() {
       credentials: false,
     })
   );
+
+  /* ⚠ BEFORE express.json(), and it cannot move below it. Resend signs the
+     exact bytes it sent, so the webhook route has to read its own raw body;
+     once express.json() has parsed and discarded them, re-encoding the object
+     changes key order and whitespace and every signature check fails. The
+     router parses its own body and applies to nothing else. */
+  app.use("/api/webhooks", webhookRoutes);
 
   /* Generous for a blog post, small enough that a runaway paste cannot
      exhaust the dyno's memory. */
@@ -74,6 +86,11 @@ export function createApp() {
       uptime: Math.round(process.uptime()),
     });
   });
+
+  /* ⚠ Public, unauthenticated and deliberately unlimited — the token in the
+     link is the authorisation and the action is idempotent. Mounted before the
+     other /api routes so nothing broader can shadow it. */
+  app.use("/api", unsubscribeRoutes);
 
   app.use("/api/auth", authRoutes);
   /* ⚠ The only route the public can WRITE to, mounted first so its own rate

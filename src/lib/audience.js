@@ -1,4 +1,5 @@
 import { Audience } from "../models/Audience.js";
+import { mirrorContact } from "./contacts.js";
 
 /* The one way a person reaches the audience list. Every public form calls this
    and nothing writes Audience directly, so the merge rules live in one place.
@@ -83,7 +84,62 @@ export async function recordAudience({
     );
   }
 
-  return Audience.findOne({ email: address }).lean();
+  const person = await Audience.findOne({ email: address }).lean();
+
+  /* ⚠ MIRRORED TO RESEND FROM HERE, because this is the one way a person
+     reaches the audience list — putting it in the subscribe route instead
+     would mirror the newsletter box and quietly miss the four other forms that
+     can also tick it.
+
+     ⚠ Only people who are actually SUBSCRIBED are mirrored. Someone who sent a
+     message without ticking the box is in Iwan's audience and is not a
+     newsletter contact, and pushing them to Resend would put an address into a
+     mailing tool that never agreed to be mailed. The row's own `subscribed` is
+     read rather than the `subscribe` argument, so a returning subscriber who
+     leaves the box untouched still refreshes their properties.
+
+     ⚠ Not awaited — see contacts.js. The subscription is stored; whether the
+     mirror lands is a separate question, and a Resend outage must not slow
+     down or fail a form that has already done its job. */
+  if (person?.subscribed) {
+    mirrorContact({
+      email: address,
+      name: person.name,
+      subscribed: true,
+      /* ⚠ Where they FIRST came from, not the form in front of us. `sources` is
+         kept in first-seen order, and the property is paired with `joined`,
+         which is the row's creation date — a returning subscriber whose source
+         flipped to whichever form they last touched would make a segment built
+         on it mean nothing. */
+      source: person.sources?.[0] ?? source,
+      country: person.country ?? country,
+      subscribedAt: person.createdAt,
+    });
+  }
+
+  return person;
 }
 
 export default recordAudience;
+
+/* Whether this address is on the newsletter, for deciding what an email SAYS
+   rather than who it goes to.
+
+   ⚠ NEVER THROWS and answers `false` when it cannot tell. The caller is a mail
+   send that must not fail over this, and "not known to be subscribed" is the
+   honest reading of a failed lookup — the List-Unsubscribe header is on the
+   message either way, so nobody is left without a way off the list. */
+export async function isSubscribed(email) {
+  const address = String(email ?? "")
+    .trim()
+    .toLowerCase();
+  if (!address) return false;
+
+  try {
+    const row = await Audience.findOne({ email: address }).select("subscribed").lean();
+    return Boolean(row?.subscribed);
+  } catch (err) {
+    console.error("Could not read the subscription state:", err);
+    return false;
+  }
+}

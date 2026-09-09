@@ -1,14 +1,15 @@
-import { Resend } from "resend";
 import { CONFIG } from "../config.js";
+import { resend } from "./resendClient.js";
 import { renderRegistrationConfirmation } from "./emails/registration.js";
 import { renderNotification } from "./emails/notification.js";
+import { unsubscribeUrl } from "./tokens.js";
+import { isSubscribed } from "./audience.js";
 
 /* Transactional mail: the TRANSPORT only — markup lives in emails/.
 
    ⚠ UNSET IS THE SWITCHED-OFF STATE. With no RESEND_API_KEY nothing is sent and
-   sign-ups carry on, so a deployment without a key still works. */
-
-const resend = CONFIG.resendApiKey ? new Resend(CONFIG.resendApiKey) : null;
+   sign-ups carry on, so a deployment without a key still works. The client
+   itself is in resendClient.js, shared with the contact sync and the webhook. */
 
 export const MAIL_ENABLED = Boolean(resend && CONFIG.mailFrom);
 
@@ -43,7 +44,24 @@ export async function sendRegistrationConfirmation({ registration, event }) {
   /* A form with no email question stores "". Nowhere to send, not an error. */
   if (!registration?.email) return { sent: false, reason: "no-address" };
 
+  /* ⚠ Empty unless API_URL is set — see lib/tokens.js. Everything below is
+     conditional on it: a footer linking nowhere, or a List-Unsubscribe header
+     pointing at localhost, is worse than not offering one. */
+  const unsubscribe = unsubscribeUrl(registration.email);
+
+  /* ⚠ THE VISIBLE LINK IS FOR SUBSCRIBERS ONLY. This confirmation goes to
+     everyone who registers, and most of them never ticked the newsletter box —
+     offering to unsubscribe them from something they never joined invites the
+     reply "I never signed up for this", which is the opposite of reassuring.
+
+     ⚠ THE HEADER STAYS ON EVERY MESSAGE regardless. It costs the reader
+     nothing, mailbox providers read its presence as a sender behaving properly,
+     and pressing Gmail's button on a message they never subscribed to still
+     does the right thing. Only the FOOTER is conditional. */
+  const showLink = Boolean(unsubscribe) && (await isSubscribed(registration.email));
+
   const { subject, html, text } = renderRegistrationConfirmation({
+    unsubscribeUrl: showLink ? unsubscribe : "",
     name: registration.name,
     eventTitle: event?.title ?? registration.eventTitle ?? "",
     when: formatWhen(event),
@@ -65,6 +83,25 @@ export async function sendRegistrationConfirmation({ registration, event }) {
       text,
       html,
       ...(CONFIG.mailReplyTo ? { replyTo: CONFIG.mailReplyTo } : {}),
+
+      /* ⚠ THE HEADERS ARE THE HALF THAT MATTERS. Gmail and Apple Mail show
+         their own unsubscribe button beside the sender name when these are
+         present, and it is the one most people press — the footer link is for
+         everyone else. Their presence is also what mailbox providers read as a
+         sender behaving properly, which is worth more to the domain's
+         reputation than the link itself.
+
+         ⚠ The angle brackets are required by RFC 2369, and One-Click by RFC
+         8058 — which is why routes/unsubscribe.js answers POST as well as GET,
+         and answers it with an empty 200. */
+      ...(unsubscribe
+        ? {
+            headers: {
+              "List-Unsubscribe": `<${unsubscribe}>`,
+              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
+          }
+        : {}),
     });
 
     if (error) {

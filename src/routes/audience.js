@@ -7,6 +7,7 @@ import { validate } from "../middleware/validate.js";
 import { isCountryCode } from "../lib/countries.js";
 import { adminApplication, adminAudience } from "../lib/serialize.js";
 import { rowsToCsv } from "../lib/csv.js";
+import { forgetContact, mirrorContact } from "../lib/contacts.js";
 
 /* Reading the audience list and the applications. Mounted under /api/admin, so
    already behind a sign-in and the read-only guard. */
@@ -132,6 +133,27 @@ router.patch(
     }).lean();
     if (!row) throw notFound("No such person");
     res.json(adminAudience(row));
+
+    /* ⚠ Only when `subscribed` was actually in the request. A note or a
+       corrected mobile is Iwan's own record and no business of Resend's, and
+       mirroring on every edit would push a contact for people who never
+       subscribed at all.
+
+       ⚠ Unticking the box sends `unsubscribed: true` rather than deleting the
+       contact: an unsubscribed contact is a record that they said no, and a
+       deleted one is nothing at all — the next import would happily mail them
+       again. Deleting the PERSON is the delete below. Not awaited, like every
+       other call to a third party here. */
+    if (typeof req.body.subscribed === "boolean") {
+      mirrorContact({
+        email: row.email,
+        name: row.name,
+        subscribed: row.subscribed,
+        source: row.sources?.[0] ?? "",
+        country: row.country ?? "",
+        subscribedAt: row.createdAt,
+      });
+    }
   })
 );
 
@@ -141,6 +163,13 @@ router.delete(
     const row = await Audience.findByIdAndDelete(req.params.id);
     if (!row) throw notFound("No such person");
     res.status(204).end();
+
+    /* ⚠ Deleting the person here means deleting them THERE too — a row removed
+       from the audience that carried on receiving broadcasts would be the worst
+       of both lists. This is the one place a contact is removed rather than
+       marked unsubscribed, because it is the one place someone has said the
+       record itself should not exist. */
+    forgetContact(row.email);
   })
 );
 
