@@ -7,6 +7,10 @@ import {
 } from "./emails/registration.js";
 import { renderNotification } from "./emails/notification.js";
 import { renderSubscribeWelcome } from "./emails/subscribe.js";
+import {
+  applicationValues,
+  renderApplicationConfirmation,
+} from "./emails/application.js";
 import { unsubscribeUrl } from "./tokens.js";
 import { background } from "./background.js";
 import { resolveTemplate, variables } from "./templates.js";
@@ -157,13 +161,83 @@ export async function sendRegistrationConfirmation({ registration, event }) {
     });
 
     if (error) {
-      console.error("Confirmation email failed:", error);
       return { sent: false, reason: error.message ?? "send-failed" };
     }
 
     return { sent: true, id: data?.id };
   } catch (err) {
-    console.error("Confirmation email threw:", err);
+    return { sent: false, reason: err?.message ?? "send-threw" };
+  }
+}
+
+/**
+ * Acknowledges a volunteer offer or a career application to the person who sent
+ * it — the same courtesy the registration confirmation pays.
+ *
+ * ⚠ NEVER THROWS, same contract as every send here.
+ *
+ * ⚠ NO UNSUBSCRIBE LINK AND NO List-Unsubscribe HEADER, unlike the welcome and
+ * the confirmation. This is a reply to something the person just sent, and
+ * applying for a role is not joining a mailing list — offering to unsubscribe
+ * them implies a subscription they never made. Anyone who ticked the newsletter
+ * box on the same form gets the welcome separately, and that carries its own.
+ *
+ * @returns {Promise<{sent: boolean, reason?: string, id?: string}>}
+ */
+export async function sendApplicationConfirmation({
+  kind = "volunteer",
+  email,
+  name = "",
+  role = "",
+  country = "",
+}) {
+  if (!MAIL_ENABLED) return { sent: false, reason: "mail-disabled" };
+  if (!email) return { sent: false, reason: "no-address" };
+
+  const siteUrl =
+    CONFIG.siteUrl && country === "ca"
+      ? `${CONFIG.siteUrl.replace(/\/$/, "")}/ca`
+      : CONFIG.siteUrl;
+
+  const { subject, html, text } = renderApplicationConfirmation({
+    kind,
+    name,
+    role,
+    siteUrl,
+  });
+
+  const template = await resolveTemplate("application", { country });
+
+  const body = template
+    ? {
+        template: {
+          id: template.id,
+          /* ⚠ The same values the built-in message gets, lower-cased — one
+             definition in emails/application.js, so the two cannot drift. */
+          variables: variables({
+            ...Object.fromEntries(
+              Object.entries(applicationValues({ kind, name, role })).map(
+                ([key, value]) => [key.toLowerCase(), value]
+              )
+            ),
+            site_url: siteUrl,
+          }),
+        },
+        ...(template.subject ? {} : { subject }),
+      }
+    : { subject, html, text };
+
+  try {
+    const { data, error } = await resend.emails.send({
+      from: CONFIG.mailFrom,
+      to: [email],
+      ...body,
+      ...(CONFIG.mailReplyTo ? { replyTo: CONFIG.mailReplyTo } : {}),
+    });
+
+    if (error) return { sent: false, reason: error.message ?? "send-failed" };
+    return { sent: true, id: data?.id };
+  } catch (err) {
     return { sent: false, reason: err?.message ?? "send-threw" };
   }
 }
@@ -196,12 +270,10 @@ export async function sendNotification({ replyTo, ...content }) {
     });
 
     if (error) {
-      console.error("Notification email failed:", error);
       return { sent: false, reason: error.message ?? "send-failed" };
     }
     return { sent: true, id: data?.id };
   } catch (err) {
-    console.error("Notification email threw:", err);
     return { sent: false, reason: err?.message ?? "send-threw" };
   }
 }
@@ -280,12 +352,10 @@ export async function sendSubscribeWelcome({ email, name = "", country = "" }) {
     });
 
     if (error) {
-      console.error("Welcome email failed:", error);
       return { sent: false, reason: error.message ?? "send-failed" };
     }
     return { sent: true, id: data?.id };
   } catch (err) {
-    console.error("Welcome email threw:", err);
     return { sent: false, reason: err?.message ?? "send-threw" };
   }
 }

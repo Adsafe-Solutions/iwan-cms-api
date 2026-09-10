@@ -143,16 +143,12 @@ export async function syncContact({
      them, and Resend refuses the whole contact when they do not — so this comes
      first. On failure the contact is still synced, WITHOUT its properties: a
      person on the list who cannot be segmented is worth having, and a person
-     missing entirely is not. The log says which happened. */
+     missing entirely is not. `tagged` in the return value says which happened. */
   let tagged = true;
   try {
     await ensureProperties();
-  } catch (err) {
+  } catch {
     tagged = false;
-    console.error(
-      "Resend contact properties could not be ensured — syncing untagged:",
-      err?.message ?? err
-    );
   }
 
   /* ⚠ Resend's flag is the NEGATIVE of Iwan's: `unsubscribed`, not
@@ -175,7 +171,6 @@ export async function syncContact({
     if (!created.error) return { synced: true, id: created.data?.id, tagged };
 
     if (!alreadyExists(created.error)) {
-      console.error("Resend contact create failed:", created.error);
       return { synced: false, reason: created.error.message ?? "create-failed" };
     }
 
@@ -185,12 +180,10 @@ export async function syncContact({
     const { segments, ...update } = payload;
     const updated = await resend.contacts.update(update);
     if (updated.error) {
-      console.error("Resend contact update failed:", updated.error);
       return { synced: false, reason: updated.error.message ?? "update-failed" };
     }
     return { synced: true, id: updated.data?.id, tagged };
   } catch (err) {
-    console.error("Resend contact sync threw:", err);
     return { synced: false, reason: err?.message ?? "sync-threw" };
   }
 }
@@ -214,12 +207,10 @@ export async function removeContact(email) {
     /* ⚠ Not there is the state we wanted. Deleting a person the mirror never
        received is a success, not a failure to report. */
     if (error && !/not.?found/i.test(error.message ?? "")) {
-      console.error("Resend contact remove failed:", error);
       return { removed: false, reason: error.message ?? "remove-failed" };
     }
     return { removed: true };
   } catch (err) {
-    console.error("Resend contact remove threw:", err);
     return { removed: false, reason: err?.message ?? "remove-threw" };
   }
 }

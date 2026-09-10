@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { Audience } from "../models/Audience.js";
+import { CONFIG } from "../config.js";
 import { readUnsubscribe } from "../lib/tokens.js";
 import { mirrorContact } from "../lib/contacts.js";
 import { wrap } from "../lib/errors.js";
@@ -26,51 +27,87 @@ import { wrap } from "../lib/errors.js";
 
 const router = Router();
 
-/* Copied from the confirmation email's palette — see lib/emails/registration.js,
-   which is where these belong. Someone arriving from that email should not
-   think they have landed on a different organisation's page. */
+/* ⚠ THE SAME DESIGN AS THE EMAILS, because this page is what the unsubscribe
+   link in one of them opens. The palette, the navy band, the accent stripe and
+   the logo are the designed template's own — somebody arriving here from that
+   email must not think they have landed on a different organisation's page.
+
+   ⚠ Values copied, not imported: the templates live in Resend now, so there is
+   nothing here to import them from. They change rarely and a mismatch is
+   cosmetic, which is the trade being made. */
 const BRAND = {
   primary: "#244967",
   accent: "#f9be00",
   ink: "#0a1020",
   muted: "#5b6b80",
   line: "#e4e8f0",
-  mist: "#f7f9fc",
+  /* ⚠ The emails' own ground, not a generic grey — this is what makes the page
+     read as a continuation of the message rather than a separate site. */
+  paper: "#efeae1",
   white: "#ffffff",
 };
 
-const FONT =
-  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'DM Sans', Roboto, Helvetica, Arial, sans-serif";
+/* The emails' stack, so the type matches what was just read. */
+const FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+
+/* ⚠ The logo is a WebP on Iwan's CDN, and the alt text is STYLED on purpose:
+   it is a real fallback that reads as a wordmark when the image is blocked or
+   the browser cannot draw it, rather than a broken-image icon. The email
+   templates do exactly this, for Outlook. */
+const LOGO = "https://cdn.iwan.community/iwan_single_logo.webp";
 
 /* ⚠ Nothing user-supplied reaches this page — the heading and message are
    chosen from the fixed set below, and the address is never echoed back. An
    address printed here would be reflected from a URL anyone can craft. */
-const page = ({ title, heading, message }) => `<!doctype html>
+const page = ({ title, heading, message, cta = "" }) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${title}</title>
 </head>
-<body style="margin:0;padding:0;background:${BRAND.mist};">
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${BRAND.mist};min-height:100vh;">
+<body style="margin:0;padding:0;background:${BRAND.paper};">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${BRAND.paper};min-height:100vh;">
   <tr>
-    <td align="center" style="padding:48px 16px;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="520" style="width:520px;max-width:100%;background:${BRAND.white};border:1px solid ${BRAND.line};border-radius:8px;overflow:hidden;">
-        <tr><td style="background:${BRAND.primary};padding:20px 30px;">
-          <span style="font-family:${FONT};font-size:15px;font-weight:800;color:${BRAND.white};letter-spacing:0.04em;">Iwan Community</span>
-        </td></tr>
+    <td align="center" valign="middle" style="padding:48px 16px;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="width:560px;max-width:100%;background:${BRAND.white};border:1px solid ${BRAND.line};border-radius:12px;overflow:hidden;">
+
+        <tr>
+          <td style="background:${BRAND.primary};padding:20px 32px;">
+            <img src="${LOGO}" width="46" height="45" alt="Iwan"
+                 style="display:block;width:46px;height:auto;font-family:${FONT};font-size:16px;font-weight:bold;color:${BRAND.white};text-decoration:none;" />
+          </td>
+        </tr>
         <tr><td style="height:4px;background:${BRAND.accent};font-size:0;line-height:0;">&nbsp;</td></tr>
-        <tr><td style="padding:34px 30px 36px 30px;">
-          <h1 style="margin:0 0 10px 0;font-family:${FONT};font-size:22px;line-height:29px;font-weight:800;color:${BRAND.ink};">${heading}</h1>
-          <p style="margin:0;font-family:${FONT};font-size:16px;line-height:24px;color:${BRAND.muted};">${message}</p>
-        </td></tr>
+
+        <tr>
+          <td style="padding:36px 32px 38px 32px;">
+            <h1 style="margin:0 0 12px 0;font-family:${FONT};font-size:23px;line-height:31px;font-weight:700;color:${BRAND.ink};">${heading}</h1>
+            <p style="margin:0;font-family:${FONT};font-size:16px;line-height:26px;color:${BRAND.muted};">${message}</p>
+${cta}
+          </td>
+        </tr>
+
       </table>
     </td>
   </tr>
 </table>
 </body>
 </html>`;
+
+/* The way back to the site. ⚠ Dropped entirely when SITE_URL is unset — a
+   button leading nowhere is worse than no button. */
+const backToSite = () =>
+  CONFIG.siteUrl
+    ? `
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 0 0;">
+              <tr>
+                <td align="center" bgcolor="${BRAND.primary}" style="border-radius:6px;">
+                  <a href="${CONFIG.siteUrl}" style="display:inline-block;padding:13px 26px;font-family:${FONT};font-size:15px;font-weight:700;color:${BRAND.white};text-decoration:none;border-radius:6px;">Back to iwan.community</a>
+                </td>
+              </tr>
+            </table>`
+    : "";
 
 const send = (res, status, body) =>
   res
@@ -81,7 +118,11 @@ const send = (res, status, body) =>
        exception it needs. */
     .set(
       "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+      /* ⚠ `img-src` names the CDN explicitly — the logo is the ONE thing this
+         page fetches, and `default-src 'none'` would otherwise block it and
+         leave the styled alt text in its place. Everything else stays denied:
+         no script, no stylesheet, no frame, nothing to post to. */
+      "default-src 'none'; img-src https://cdn.iwan.community; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
     )
     /* An unsubscribe confirmation is nobody's search result. */
     .set("X-Robots-Tag", "noindex, nofollow")
@@ -96,7 +137,12 @@ async function unsubscribe(token) {
   const email = readUnsubscribe(token);
   if (!email) return false;
 
-  await Audience.updateOne({ email }, { $set: { subscribed: false } });
+  /* ⚠ The welcome stamp goes with it — see the model. Coming back later is a
+     new subscription, and it earns its own welcome. */
+  await Audience.updateOne(
+    { email },
+    { $set: { subscribed: false, welcomeSentAt: null, welcomedCountries: [] } }
+  );
 
   /* ⚠ Pushed to Resend too, or the two sides disagree the moment this is used:
      Resend would go on believing they are subscribed and the next broadcast
@@ -145,6 +191,7 @@ router.get(
           heading: "That link did not work",
           message:
             "It may have been cut in half by your email app. Reply to any email from us and we will take you off the list by hand.",
+          cta: backToSite(),
         })
       );
     }
@@ -160,7 +207,8 @@ router.get(
            left that ambiguous would have people turning up expecting nothing or
            not turning up at all. */
         message:
-          "You will not receive any more newsletters from Iwan Community. Confirmations for events you have registered for will still be sent — unsubscribing does not cancel a booking.",
+          "You will not receive any more newsletters from Iwan Community. Confirmations for events you have registered for will still be sent \u2014 unsubscribing does not cancel a booking. Changed your mind? You can subscribe again from the footer of the site.",
+        cta: backToSite(),
       })
     );
   })

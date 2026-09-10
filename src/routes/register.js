@@ -139,7 +139,7 @@ router.post(
        the booking confirmation below, because they say different things and
        one of them is marketing. `welcome` does nothing if the box was not
        ticked, or if this person has been greeted before. */
-    await welcome(person);
+    await welcome(person, country);
 
     /* ⚠ Iwan's own heads-up, beside the registrant's confirmation. The ANSWERS
        are included so the inbox is enough to act on without opening the CMS. */

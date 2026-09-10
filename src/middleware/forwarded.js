@@ -37,9 +37,6 @@ export const requireForwarded = (req, _res, next) => {
     /* ⚠ The same message a bot would get for any other refusal, and nothing
        about which check failed — telling a spammer what is missing is telling
        them what to send. The reason goes to the log. */
-    console.warn(
-      `[forwarded] refused ${req.method} ${req.originalUrl} — no valid ${HEADER}`
-    );
     throw forbidden("This form could not be verified. Please try again.");
   }
 

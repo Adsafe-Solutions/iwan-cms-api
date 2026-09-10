@@ -18,6 +18,7 @@
     "format:check": "prettier --check .",
     "smoke": "node scripts/smoke.js",
     "webhook:ping": "node scripts/webhook-ping.js",
+    "mail:preview": "node scripts/mail-preview.js",
     "dev:memory": "node scripts/dev-memory.js",
     "migrate:blog-html": "node scripts/migrate-blog-html.js",
     "sync:contacts": "node scripts/sync-contacts.js",

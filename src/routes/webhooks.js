@@ -64,7 +64,14 @@ async function apply(event) {
     case "contact.created":
     case "contact.updated":
       if (!data?.email) return "no-email";
-      await update(data.email, { subscribed: !data.unsubscribed });
+      /* ⚠ Unsubscribing clears the welcome stamp, so coming back later is a
+         new subscription with its own welcome — see the model. Re-subscribing
+         does NOT set it: the welcome is sent by the form that opts somebody in,
+         not by Resend telling us it happened. */
+      await update(data.email, {
+        subscribed: !data.unsubscribed,
+        ...(data.unsubscribed ? { welcomeSentAt: null, welcomedCountries: [] } : {}),
+      });
       return data.unsubscribed ? "unsubscribed" : "subscribed";
 
     /* Gone from Resend's list, so nothing can be mailed to them through it.
@@ -73,7 +80,11 @@ async function apply(event) {
        contact in a mailing tool is not a request to be forgotten. */
     case "contact.deleted":
       if (!data?.email) return "no-email";
-      await update(data.email, { subscribed: false });
+      await update(data.email, {
+        subscribed: false,
+        welcomeSentAt: null,
+        welcomedCountries: [],
+      });
       return "unsubscribed";
 
     /* A spam report. Legally and reputationally this is stronger than an
@@ -81,7 +92,11 @@ async function apply(event) {
        sending domain gets blocked, so it comes off the list here rather than
        waiting for the contact event that may not follow. */
     case "email.complained":
-      await Promise.all((data?.to ?? []).map((to) => update(to, { subscribed: false })));
+      await Promise.all(
+        (data?.to ?? []).map((to) =>
+          update(to, { subscribed: false, welcomeSentAt: null, welcomedCountries: [] })
+        )
+      );
       return "complained";
 
     /* ⚠ LOGGED, NOT ACTED ON, and deliberately. A bounce is not consent
@@ -96,9 +111,6 @@ async function apply(event) {
          by more people than the database is, and is not where anyone should
          have to go looking for it. The count and the kind are what a bounce
          rate is read from; the address is already on the message in Resend. */
-      console.warn(
-        `[resend] bounce (${data?.bounce?.type ?? "unknown"}) for ${(data?.to ?? []).length} recipient(s)`
-      );
       return "logged";
 
     default:
@@ -134,7 +146,6 @@ router.post("/resend", rawJson, async (req, res) => {
     /* ⚠ 400 and not 401, on purpose: a 4xx tells Resend to stop retrying, and
        a request that cannot be verified will not verify on the fifth attempt
        either. The reason goes to the log, never to the caller. */
-    console.warn("[resend] rejected an unverified webhook:", err?.message ?? err);
     return res.status(400).json({ error: "Invalid signature" });
   }
 
@@ -147,7 +158,6 @@ router.post("/resend", rawJson, async (req, res) => {
   } catch (err) {
     /* A database failure IS worth retrying — the event was real and the write
        did not happen. 500 asks Resend to send it again. */
-    console.error("[resend] could not apply a webhook event:", err);
     return res.status(500).json({ error: "Could not apply the event" });
   }
 });

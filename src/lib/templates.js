@@ -39,6 +39,14 @@ export const aliasesFor = (kind, { country = "" } = {}) => {
        social accounts are its own, so the two are not interchangeable. */
     return [country && `${welcome}-${country}`, welcome].filter(Boolean);
   }
+  /* ⚠ ONE ALIAS FOR BOTH volunteer and career — they are the same
+     acknowledgement with a different word in it, and the word is a variable.
+     Two templates would drift apart the first time one was edited. */
+  if (kind === "application") {
+    const base = CONFIG.templates.application || "iwan-application";
+    return [country && `${base}-${country}`, base].filter(Boolean);
+  }
+
   if (kind !== "registration") return [];
 
   return [country && `${REGISTRATION}-${country}`, REGISTRATION].filter(Boolean);
@@ -83,16 +91,12 @@ async function lookup(alias) {
          log, because it means the code fallback is being used for a reason
          nobody chose. */
       if (!/not.?found|404/i.test(`${error.name ?? ""} ${error.message ?? ""}`)) {
-        console.error(`[templates] could not read "${alias}":`, error.message ?? error);
       }
     } else if (data?.status !== "published") {
-      console.warn(`[templates] "${alias}" is a draft — using the built-in message`);
     } else {
       found = { id: data.id, subject: data.subject ?? null };
     }
-  } catch (err) {
-    console.error(`[templates] lookup for "${alias}" threw:`, err?.message ?? err);
-  }
+  } catch {}
 
   cache.set(alias, found);
   return found;

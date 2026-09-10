@@ -26,15 +26,18 @@ const ON_VERCEL = Boolean(process.env.VERCEL);
  * ⚠ NEVER REJECTS. A failed notification is not a failed form, and an
  * unhandled rejection would take the process down on Node.
  *
- * @param {string} label what to call this in the log when it fails
+ * ⚠ FAILURES ARE SWALLOWED IN SILENCE, deliberately — this API logs nothing at
+ * runtime. The cost is real: a mail send or a contact push that fails leaves no
+ * trace here, so diagnosing one means reproducing it. Resend's own dashboard is
+ * where a failed send can still be seen.
+ *
+ * @param {string} label names the work at the call site, for whoever reads it
  * @param {() => Promise<unknown>} work
  */
 export function background(label, work) {
   const running = Promise.resolve()
     .then(work)
-    .catch((err) => {
-      console.error(`[background] ${label} failed:`, err?.message ?? err);
-    });
+    .catch(() => {});
 
   /* ⚠ The whole point. Off Vercel the caller carries on immediately and the
      work finishes on its own; on Vercel the caller waits, because there is no

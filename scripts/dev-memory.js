@@ -45,16 +45,75 @@ await User.create({
   role: "admin",
 });
 
-/* Seeded in-process, so the data is there before the port opens. */
+/* Seeded in-process, so the data is there before the port opens.
+
+   ⚠ The content comes from the PUBLIC SITE's own files, which live in a
+   different repository — `--from` says where. Pass it through so this can be
+   pointed at wherever that repo is checked out:
+
+     npm run dev:memory -- --from=../../new-iwan/src/content/base
+
+   ⚠ A MISSING SOURCE IS NOT FATAL. The whole point of this script is to get a
+   working API up with no Atlas and no setup; refusing to boot because a sibling
+   repo is somewhere else would defeat that. It says so and carries on with an
+   empty database — the admin still works, and content can be created in the
+   CMS by hand. */
 const { seedInto } = await import("./seed-lib.js");
-const counts = await seedInto();
+
+const fromArg = process.argv.find((a) => a.startsWith("--from="));
+
+let counts = { events: 0, blogs: 0, episodes: 0, promos: 0 };
+let seedError = "";
+
+try {
+  counts = await seedInto(fromArg ? { source: fromArg.slice("--from=".length) } : {});
+} catch (err) {
+  seedError = err.message.split("\n")[0];
+}
+
+/* ⚠ ONE DEMO EVENT WHEN THERE IS NOTHING TO REGISTER FOR. The public site no
+   longer ships events, blogs, podcast or promo — they come from this API now —
+   so there is usually nothing for `seedInto` to read and the database comes up
+   empty. An empty database cannot exercise the one route the public can write
+   to, which is the thing most worth trying locally.
+
+   ⚠ INVENTED CONTENT, and safe only because this script cannot touch a real
+   database: it runs against the throwaway in-memory server started above and
+   nothing else. It is skipped the moment there is a real event. */
+const { Event } = await import("../src/models/Event.js");
+
+if ((await Event.countDocuments({})) === 0) {
+  await Event.create({
+    slug: "demo-event",
+    status: "published",
+    title: "Demo Event (local only)",
+    countries: [],
+    date: new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10),
+    start: "18:30",
+    end: "20:30",
+    venue: "Iwan Hall",
+    address: "14 Main Street, Bangalore",
+    summary: "Created by dev:memory so the registration form has something to post to.",
+    /* The smallest form the API will accept on a published event: it must ask
+       for an email, or a registration reaches nobody. */
+    form: [
+      { key: "name", label: "Your name", type: "name", required: true },
+      { key: "email", label: "Email", type: "email", required: true },
+    ],
+  });
+}
 
 createApp().listen(CONFIG.port, () => {
   console.log(`
 ┌─ iwan-cms-api (in-memory) ────────────────────────────────
 │  http://localhost:${CONFIG.port}
 │
-│  Seeded: ${counts.events} events · ${counts.blogs} posts · ${counts.episodes} episodes · ${counts.promos} promos
+│  ${
+    seedError
+      ? `⚠ NOT SEEDED — ${seedError}
+│    The public site no longer ships events — a demo one is created instead.`
+      : `Seeded: ${counts.events} events · ${counts.blogs} posts · ${counts.episodes} episodes · ${counts.promos} promos`
+  }
 │
 │  Sign in with
 │    ${USERNAME}   (or ${EMAIL})

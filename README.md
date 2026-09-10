@@ -132,12 +132,14 @@ file them however you like as long as the alias matches.
 ⚠ **Tried in order, the first published one wins**, so an account can override
 everything with one template or just one country:
 
-| template id                       | for                    |
-| --------------------------------- | ---------------------- |
-| `iwan-registration-{in\|ca}`      | that country           |
-| `iwan-registration`               | any registration       |
-| `iwan-subscribe-welcome-{in\|ca}` | that country's welcome |
-| `iwan-subscribe-welcome`          | any welcome            |
+| template id                       | for                                             |
+| --------------------------------- | ----------------------------------------------- |
+| `iwan-registration-{in\|ca}`      | that country                                    |
+| `iwan-registration`               | any registration                                |
+| `iwan-subscribe-welcome-{in\|ca}` | that country's welcome                          |
+| `iwan-subscribe-welcome`          | any welcome                                     |
+| `iwan-application-{in\|ca}`       | that country's volunteer/career acknowledgement |
+| `iwan-application`                | any application                                 |
 
 ### ⚠ The variable names are NOT the tokens in the HTML file
 
@@ -151,6 +153,7 @@ registration   first_name · event_title · event_date · event_start · event_e
                event_venue · event_url · event_image · directions_url
                unsubscribe_url
 welcome        first_name · site_url · unsubscribe_url
+application    first_name · application_type · role · site_url
 ```
 
 ⚠ **Declare every one on the template, each with a fallback.** Resend's syntax is

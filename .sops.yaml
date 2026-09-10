@@ -1,0 +1,25 @@
+creation_rules:
+  - path_regex: .env.local
+    key_groups:
+      - pgp:
+          # Aquib Yazdani
+          - 97CF2F97E6E05EAFC874995CCFA67999A36E38AF
+          # Mohammed Maaz
+          - B37033CFAC1C06C2EBD98915268393EA97ABD8D8
+          # Nasreena S
+          - 145F018932E8DE80D3591A525985550B1FB5D8DA
+          # Robo Account
+          - 8A7EFF982F49460FB66124BBAA82B9E90EAEE58C
+  - key_groups:
+      - pgp:
+          # Aquib Yazdani
+          - 97CF2F97E6E05EAFC874995CCFA67999A36E38AF
+          # Mohammed Maaz
+          - B37033CFAC1C06C2EBD98915268393EA97ABD8D8
+          # Nasreena S
+          - 145F018932E8DE80D3591A525985550B1FB5D8DA
+          # Robo Account
+          - 8A7EFF982F49460FB66124BBAA82B9E90EAEE58C
+#############################################
+## NOTE: PLEASE RESPECT ALPHABETICAL ORDER ##
+#############################################

@@ -127,7 +127,15 @@ router.patch(
   "/:id",
   validate(audienceUpdate, { partial: true }),
   wrap(async (req, res) => {
-    const row = await Audience.findByIdAndUpdate(req.params.id, req.body, {
+    /* ⚠ Unticking the box here clears the welcome stamp too, exactly as an
+       unsubscribe from an email does — so somebody an editor removes, who later
+       subscribes again, is greeted properly. See the model. */
+    const patch =
+      req.body.subscribed === false
+        ? { ...req.body, welcomeSentAt: null, welcomedCountries: [] }
+        : req.body;
+
+    const row = await Audience.findByIdAndUpdate(req.params.id, patch, {
       new: true,
       runValidators: true,
     }).lean();

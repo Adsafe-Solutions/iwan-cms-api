@@ -141,7 +141,6 @@ export async function isSubscribed(email) {
     const row = await Audience.findOne({ email: address }).select("subscribed").lean();
     return Boolean(row?.subscribed);
   } catch (err) {
-    console.error("Could not read the subscription state:", err);
     return false;
   }
 }

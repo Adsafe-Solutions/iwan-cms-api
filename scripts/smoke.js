@@ -48,6 +48,11 @@ process.env.MAIL_FROM = "";
    MAIL_TO set would have every smoke run emailing a real inbox. */
 process.env.MAIL_TO = "";
 process.env.CMS_URL = "";
+/* ⚠ EMPTIED for the same reason, and it bit the same way: config.js loads .env,
+   so a developer with API_URL set for local work had this suite building real
+   unsubscribe links and failing the check that proves they are DROPPED when
+   there is nowhere to point them. What is under test is the unset state. */
+process.env.API_URL = "";
 /* ⚠ And the contact sync, which reaches Resend on every SUBSCRIBE rather than
    only when mail is sent — a developer with a real key would have had this
    suite writing its fixtures into the live Resend audience. Emptying the key
@@ -3137,6 +3142,9 @@ await check("subscribing says whether you were already in", async () => {
     sources: ["subscribe"],
     country: "in",
     welcomeSentAt: new Date(),
+    /* ⚠ Welcomed for INDIA — which is what the repeat submission below is
+       tested against. Canada would be a separate opt-in. */
+    welcomedCountries: ["in"],
   });
 
   const again = await call("POST", "/api/subscribe", {
@@ -3151,10 +3159,105 @@ await check("⚠ the welcome is sent ONCE, ever", async () => {
   const { Audience } = await import("../src/models/Audience.js");
 
   const person = await Audience.findOne({ email: "already-in@example.com" }).lean();
-  assert.ok(person.welcomeSentAt, "the fixture above should have stamped this");
+  assert.deepEqual(person.welcomedCountries, ["in"]);
 
-  const result = await welcomeSubscriber(person);
-  assert.deepEqual(result, { sent: false, reason: "already-sent" });
+  assert.deepEqual(await welcomeSubscriber(person, "in"), {
+    sent: false,
+    reason: "already-sent",
+  });
+});
+
+await check("⚠ unsubscribing EARNS A NEW WELCOME on coming back", async () => {
+  /* Somebody who leaves and returns is making a new opt-in, and the welcome is
+     the only confirmation it took. The stamp records the CURRENT subscription,
+     not the person's history — so every write that unsubscribes clears it. */
+  const { Audience } = await import("../src/models/Audience.js");
+  const { welcomeSubscriber } = await import("../src/lib/welcome.js");
+  const { signUnsubscribe } = await import("../src/lib/tokens.js");
+
+  await Audience.create({
+    email: "came-back@example.com",
+    subscribed: true,
+    sources: ["subscribe"],
+    country: "in",
+    welcomeSentAt: new Date(),
+    welcomedCountries: ["in"],
+  });
+
+  /* Already greeted for this subscription. */
+  const first = await Audience.findOne({ email: "came-back@example.com" }).lean();
+  assert.equal((await welcomeSubscriber(first, "in")).reason, "already-sent");
+
+  /* They unsubscribe from an email. */
+  const res = await fetch(
+    `${base}/api/unsubscribe?t=${encodeURIComponent(signUnsubscribe("came-back@example.com"))}`
+  );
+  assert.equal(res.status, 200);
+
+  const off = await Audience.findOne({ email: "came-back@example.com" }).lean();
+  assert.equal(off.subscribed, false);
+  assert.deepEqual(off.welcomedCountries, [], "the claim survived an unsubscribe");
+
+  /* ...and subscribe again. The welcome is due once more. */
+  await call("POST", "/api/subscribe", { body: { email: "came-back@example.com" } });
+  const again = await Audience.findOne({ email: "came-back@example.com" }).lean();
+  assert.equal(again.subscribed, true);
+
+  /* Mail is off in this run, so the attempt fails and hands the stamp back —
+     what matters is that it was ATTEMPTED rather than skipped. */
+  assert.notEqual((await welcomeSubscriber(again, "in")).reason, "already-sent");
+});
+
+await check("⚠ an admin unticking the box clears it too", async () => {
+  const { Audience } = await import("../src/models/Audience.js");
+  const row = await Audience.create({
+    email: "cms-removed@example.com",
+    subscribed: true,
+    sources: ["subscribe"],
+    country: "in",
+    welcomeSentAt: new Date(),
+    welcomedCountries: ["in"],
+  });
+
+  await call("PATCH", `/api/admin/audience/${row._id}`, {
+    token,
+    body: { subscribed: false },
+  });
+
+  const after = await Audience.findOne({ email: "cms-removed@example.com" }).lean();
+  assert.equal(after.subscribed, false);
+  assert.deepEqual(after.welcomedCountries, [], "the claim survived a CMS unsubscribe");
+});
+
+await check("⚠ the OTHER country is a separate opt-in", async () => {
+  /* India and Canada are different lists — different events, links and social
+     accounts — so somebody already on India's list who subscribes on the
+     Canadian site is opting in again, and earns Canada's own welcome. */
+  const { welcomeSubscriber, alreadySubscribed } = await import("../src/lib/welcome.js");
+  const { Audience } = await import("../src/models/Audience.js");
+
+  await Audience.create({
+    email: "both-countries@example.com",
+    subscribed: true,
+    sources: ["subscribe"],
+    country: "in",
+    welcomeSentAt: new Date(),
+    welcomedCountries: ["in"],
+  });
+
+  const person = await Audience.findOne({ email: "both-countries@example.com" }).lean();
+
+  assert.equal(alreadySubscribed(person, "in"), true);
+  assert.equal(alreadySubscribed(person, "ca"), false, "Canada looked already-done");
+
+  assert.equal((await welcomeSubscriber(person, "in")).reason, "already-sent");
+  /* ⚠ Mail is off in this run, so the send fails — what matters is that it was
+     ATTEMPTED for Canada rather than skipped. */
+  assert.notEqual(
+    (await welcomeSubscriber(person, "ca")).reason,
+    "already-sent",
+    "the other country was treated as already welcomed"
+  );
 });
 
 await check("⚠ a FAILED send gives the one chance back", async () => {
@@ -3173,12 +3276,16 @@ await check("⚠ a FAILED send gives the one chance back", async () => {
     country: "in",
   });
 
-  const result = await welcomeSubscriber(person);
+  const result = await welcomeSubscriber(person, "in");
   assert.equal(result.sent, false);
   assert.equal(result.reason, "mail-disabled");
 
   const after = await Audience.findOne({ email: "outage@example.com" }).lean();
-  assert.equal(after.welcomeSentAt, null, "a failed send consumed the only attempt");
+  assert.deepEqual(
+    after.welcomedCountries,
+    [],
+    "a failed send consumed the only attempt"
+  );
 });
 
 await check("⚠ nobody is greeted who did not ask", async () => {
@@ -3192,11 +3299,14 @@ await check("⚠ nobody is greeted who did not ask", async () => {
   const person = await Audience.findOne({ email: "no-thanks@example.com" }).lean();
   assert.equal(person.subscribed, false);
 
-  assert.deepEqual(await welcomeSubscriber(person), {
+  assert.deepEqual(await welcomeSubscriber(person, "ca"), {
     sent: false,
     reason: "not-subscribed",
   });
-  assert.deepEqual(await welcomeSubscriber(null), { sent: false, reason: "no-address" });
+  assert.deepEqual(await welcomeSubscriber(null, "in"), {
+    sent: false,
+    reason: "no-address",
+  });
 });
 
 await check("ticking the box on a REGISTRATION subscribes them too", async () => {
@@ -3256,6 +3366,78 @@ await check("template variables are coerced to what Resend accepts", async () =>
     variables({ name: "Aisha", spots: 12, missing: undefined, none: null, yes: true }),
     { name: "Aisha", spots: 12, missing: "", none: "", yes: "true" }
   );
+});
+
+console.log("\nvolunteer and career confirmations");
+
+await check("both kinds acknowledge the person who applied", async () => {
+  /* ⚠ Until this existed they filled in a form and heard nothing at all —
+     only Iwan got a notification. */
+  const { renderApplicationConfirmation } =
+    await import("../src/lib/emails/application.js");
+
+  const volunteer = renderApplicationConfirmation({
+    kind: "volunteer",
+    name: "Aisha Rahman",
+    siteUrl: "https://iwan.community",
+  });
+  assert.match(volunteer.subject, /offering to help/i);
+  /* ⚠ First name only, as everywhere else. */
+  assert.match(volunteer.html, /Hi Aisha,/);
+  assert.ok(!volunteer.html.includes("Rahman"));
+
+  const career = renderApplicationConfirmation({
+    kind: "career",
+    name: "Omar",
+    role: "Programme Coordinator",
+  });
+  assert.match(career.subject, /your application/i);
+  /* The role appears only where the form asked for one. */
+  assert.match(career.html, /Programme Coordinator/);
+  assert.ok(!volunteer.html.includes("Role:"), "a volunteer offer printed a role");
+});
+
+await check("⚠ an application carries NO unsubscribe link", async () => {
+  /* Applying for a role is not joining a mailing list. Offering to unsubscribe
+     implies a subscription they never made — and the welcome, which they get
+     separately if they ticked the box, carries its own. */
+  const { renderApplicationConfirmation } =
+    await import("../src/lib/emails/application.js");
+  const { html, text } = renderApplicationConfirmation({ kind: "career", name: "Omar" });
+  assert.ok(!html.toLowerCase().includes("unsubscribe"));
+  assert.ok(!text.toLowerCase().includes("unsubscribe"));
+});
+
+await check("an unknown kind falls back rather than failing to send", async () => {
+  const { renderApplicationConfirmation, applicationValues } =
+    await import("../src/lib/emails/application.js");
+  const { html } = renderApplicationConfirmation({ kind: "nonsense", name: "Sam" });
+  assert.match(html, /Hi Sam,/);
+  assert.equal(applicationValues({ kind: "nonsense" }).APPLICATION_TYPE, "volunteering");
+});
+
+await check("the application template is looked up per country", async () => {
+  const { aliasesFor } = await import("../src/lib/templates.js");
+  assert.deepEqual(aliasesFor("application", { country: "ca" }), [
+    "iwan-application-ca",
+    "iwan-application",
+  ]);
+  /* ⚠ ONE alias for both kinds — the kind is a variable on the template. */
+  assert.deepEqual(aliasesFor("application", {}), ["iwan-application"]);
+});
+
+await check("applying still succeeds with mail off", async () => {
+  /* The acknowledgement is awaited now, so a broken send would be a broken
+     form if anything here could throw. Nothing can. */
+  const volunteer = await call("POST", "/api/volunteer?country=ca", {
+    body: {
+      answers: { name: { first: "Vol", last: "Unteer" }, email: "vol2@example.com" },
+    },
+  });
+  assert.equal(volunteer.status, 201);
+
+  const { Application } = await import("../src/models/Application.js");
+  assert.ok(await Application.findOne({ email: "vol2@example.com" }));
 });
 
 console.log("\nthe unsubscribe link");
@@ -3357,9 +3539,18 @@ await check("the page fetches nothing and is not indexable", async () => {
   assert.match(res.headers.get("x-robots-tag") ?? "", /noindex/);
 
   const html = await res.text();
-  for (const tag of ["<script", "<img", "<link"]) {
+  /* ⚠ No script, no stylesheet, nothing to post to. The ONE thing it fetches is
+     the logo, which is why the policy names that host and nothing else. */
+  for (const tag of ["<script", "<link", "<form", "<iframe"]) {
     assert.ok(!html.includes(tag), `the page pulls in ${tag}`);
   }
+  const images = html.match(/<img[^>]*src="([^"]+)"/g) ?? [];
+  assert.equal(images.length, 1, "the page loads more than the logo");
+  assert.match(images[0], /^<img src="https:\/\/cdn\.iwan\.community\//);
+  assert.match(
+    res.headers.get("content-security-policy") ?? "",
+    /img-src https:\/\/cdn\.iwan\.community/
+  );
 });
 
 await check("⚠ the footer link is for SUBSCRIBERS only", async () => {
