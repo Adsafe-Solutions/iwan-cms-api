@@ -14,7 +14,10 @@ import { MongoMemoryServer } from "mongodb-memory-server";
    opens is a real one — the same login works against whatever database
    `npm run dev` points at. Taken from your gitignored .env when set, otherwise
    generated fresh each boot and printed in the banner below. */
-const EMAIL = process.env.ADMIN_EMAIL || "dev@localhost";
+/* ⚠ Needs a DOT in the domain — the User model validates against /\S+@\S+\.\S+/,
+   so the obvious "dev@localhost" fails validation and takes the boot down with
+   it before the port ever opens. */
+const EMAIL = process.env.ADMIN_EMAIL || "dev@iwan.local";
 const USERNAME = process.env.ADMIN_USERNAME || "dev";
 const PASSWORD = process.env.ADMIN_PASSWORD || randomBytes(9).toString("base64url");
 const GENERATED = !process.env.ADMIN_PASSWORD;

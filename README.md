@@ -117,6 +117,252 @@ overwrite a post an editor has since rewritten; `--dry` shows what it would do.
 The original `body` blocks are left in place — this conversion happens once, and
 keeping the source means it can be redone if the mapping turns out wrong.
 
+## The Resend audience
+
+Everyone who **subscribes** is mirrored into Resend as a contact, so a
+newsletter can be written in Resend's own composer instead of exporting a CSV
+before every send.
+
+⚠ **The `audience` collection stays the record of truth.** It holds the
+messages, the sources, the notes and everyone who filled in a form without
+ticking the box. Resend gets only the subset that agreed to be mailed.
+
+⚠ **The push happens in `recordAudience`, not in the subscribe route** — that
+is the one way a person reaches the audience list, and five forms can tick the
+newsletter box. Wiring it to `/api/subscribe` would mirror the newsletter box
+and silently miss the other four.
+
+⚠ **Only `subscribed` rows are mirrored**, and the stored row's own flag is what
+is read, not the flag on the request. Someone who sent a contact message without
+opting in is in Iwan's audience and is not a Resend contact.
+
+⚠ **It rides on `RESEND_API_KEY`.** No key means no sync, exactly as it means no
+mail, and every form works unchanged. `RESEND_SEGMENT_ID` is optional — it is
+the list a broadcast goes to; without it contacts still land on the account,
+just ungrouped.
+
+### Properties, not tags
+
+Resend contacts have **no tags field** — `properties` is the equivalent, and
+`lib/contacts.js` writes the same four on every contact: `source` (which form
+brought them in), `country`, `joined` (a day string), and `managed_by:
+iwan-cms`, which is what tells a mirrored contact apart from one added by hand
+in the dashboard. `source` records where somebody **first** arrived, not the
+form they last touched — it is paired with `joined`, and a value that moved
+around would make anything built on it meaningless.
+
+⚠ **A property must exist on the account before a contact can carry it, and
+Resend refuses the WHOLE CONTACT when it does not** — not the property, the
+contact. So `ensureProperties` creates any that are missing, once per process,
+on the first sync rather than at boot: a deployment that never takes a
+subscriber should not spend a round trip on every cold start proving something
+it will not use. **There is nothing to set up in the dashboard.** A property
+deleted there reappears on the next sync.
+
+If they cannot be ensured at all — Resend down, a key without permission — the
+contact is synced **untagged** rather than not at all, and the log says so. A
+person on the list who cannot be segmented is worth having; a person missing
+from it is not.
+
+### Segments are lists, not rules
+
+⚠ **`RESEND_SEGMENT_ID` is ONE optional id, and it is not per source.** A Resend
+segment is a static list — creating one takes a name and nothing else, with no
+filter or condition — so there is no "everyone whose `source` is event" segment
+that keeps itself up to date. Everyone mirrored goes into the one segment named
+here, and the `source` property is what distinguishes them inside it. With no
+segment set they are still contacts on the account, just ungrouped.
+
+Wanting a genuinely separate list per form is a change to `lib/contacts.js`, not
+a configuration: it would need a segment id per source and a map from one to the
+other. Worth doing the day a broadcast needs to reach volunteers without
+reaching everybody, and not before.
+
+⚠ **Resend's flag is the NEGATIVE of ours** — `unsubscribed`, not `subscribed`.
+It is inverted in both directions, in `lib/contacts.js` on the way out and in
+`routes/webhooks.js` on the way in. Getting it backwards mails everyone who
+opted out.
+
+Nothing is awaited. A sync that fails is logged and the form still answers 201 —
+the subscription is stored either way, and a Resend outage must never turn a
+filled-in form into an error the person retries.
+
+### Unsubscribing
+
+⚠ **Resend does this for BROADCASTS and does none of it for the mail this API
+sends.** Its hosted flow — the `{{{RESEND_UNSUBSCRIBE_URL}}}` variable, the
+customisable page, the contact update — applies to Broadcasts and Automations
+only; their own words are _"Resend doesn't manage contact lists for
+transactional emails"_. So a newsletter sent from Resend already unsubscribes
+people properly and the webhook above syncs it back, and the confirmation email
+this API sends needs its own, which is `routes/unsubscribe.js`.
+
+It does the same three things Resend's page does: records it, says so, and
+tells the other side.
+
+- `GET /api/unsubscribe?t=…` — the link in the email. Unsubscribes, then renders
+  the one HTML page this API serves.
+- `POST /api/unsubscribe?t=…` — RFC 8058 one-click. Gmail and Apple Mail show
+  their **own** unsubscribe button beside the sender name and post here when it
+  is pressed, without the person ever seeing a page. ⚠ It answers an empty
+  `200`, always — a redirect, a body, or a 4xx all read as a failed unsubscribe
+  to the provider, and a 4xx teaches it that this sender's button is broken.
+
+⚠ **A signed token, never the address.** `?email=…` would let anyone
+unsubscribe anyone by typing an address, and every such link leaks a real
+address into logs and referrers. The token carries a `purpose` claim, so a
+session token signed with the same `JWT_SECRET` cannot be spent here.
+
+⚠ **It never expires.** People unsubscribe from the oldest mail in the pile, and
+"this link has expired" is a link that failed at its only job — the recipient
+does not try again, they press _spam_, which costs the domain far more than an
+old token being valid.
+
+⚠ **The visible footer link is for SUBSCRIBERS only; the header is on every
+message.** The confirmation goes to everyone who registers, and most never
+ticked the newsletter box — offering to unsubscribe them from something they
+never joined invites the reply _"I never signed up for this"_. The
+`List-Unsubscribe` header stays regardless: it costs the reader nothing, mailbox
+providers read its presence as a sender behaving properly, and pressing Gmail's
+button still does the right thing.
+
+⚠ **It needs `API_URL`.** With none set there is no honest way for the process
+to know its own public address, so the footer link and both headers are dropped
+rather than pointing at localhost.
+
+⚠ **It writes to Resend too.** Unsubscribing here and not there means the next
+broadcast still reaches them — the mirror image of what the webhook does in the
+other direction.
+
+The page says plainly what has **not** stopped: unsubscribing from the
+newsletter does not cancel a place at an event. It fetches nothing — no script,
+no image, no stylesheet — and carries its own tight CSP, because the app-wide
+one is off on the grounds that this API served no HTML until this route existed.
+
+### The webhook
+
+`POST /api/webhooks/resend` is the only inbound path, and the reason the two
+lists do not drift. Point a webhook in the Resend dashboard at it, subscribed to
+`contact.created`, `contact.updated`, `contact.deleted` and `email.complained`,
+and put its `whsec_…` signing secret in `RESEND_WEBHOOK_SECRET`.
+
+⚠ **This is what carries an unsubscribe back.** Someone clicking the link at the
+bottom of a broadcast is recorded by Resend, not here; without the webhook Iwan
+goes on believing they are subscribed and mails them again next month.
+
+⚠ **It is mounted BEFORE `express.json()` in `app.js` and cannot move below it.**
+The signature covers the exact bytes Resend sent, and parsing the JSON then
+re-encoding it changes key order and whitespace, so every verification fails.
+The router parses its own raw body; a smoke check posts malformed JSON to prove
+nothing upstream got there first.
+
+⚠ **Nothing here creates a person.** Every write is an `updateOne` with no
+upsert, so an event for an address Iwan has never seen changes nothing — a
+leaked signing secret must not become an unauthenticated write to the audience.
+
+⚠ **A complaint unsubscribes; a bounce only logs.** A spam report is stronger
+than an unsubscribe and carrying on is how a sending domain gets blocked. A
+bounce is not consent withdrawn — a full mailbox, a bad afternoon and a dead
+address all arrive as the same event, and acting on the first would drop people
+who are still reading. Recording delivery state per person wants a field of its
+own the day that matters.
+
+### Setting it up
+
+In the Resend dashboard, once:
+
+1. **Create a webhook** pointing at `https://YOUR-API-HOST/api/webhooks/resend`,
+   subscribed to `contact.created`, `contact.updated`, `contact.deleted` and
+   `email.complained`. ⚠ Those four are exactly what `routes/webhooks.js` acts
+   on — subscribing to fewer silently drops an unsubscribe, and to more delivers
+   events nothing reads.
+2. **Copy its signing secret** into the deployment's environment as
+   `RESEND_WEBHOOK_SECRET`, and set `API_URL` to the API's own public address.
+3. Optionally **create a segment** for subscribers and set `RESEND_SEGMENT_ID`
+   to its id. Without one they are still contacts, just ungrouped.
+
+⚠ **The service has to restart to read them.** Until it does, the webhook
+endpoint answers 503 — which Resend retries, so nothing is lost meanwhile.
+
+There is nothing else to set up: the four contact properties are created by the
+API itself on the first sync, not by hand.
+
+Then, if there are already subscribers in the database:
+
+```bash
+npm run sync:contacts -- --dry     # check, then run it for real
+npm run sync:contacts
+```
+
+`sync:contacts` is the one-off that carries the audience **already in the
+database** up to Resend. Without it the live sync only fires when somebody
+submits a form, so an existing list would cross over one person at a time as
+they happen to come back — which for most of a list is never. It syncs only
+people who are `subscribed` (`--all` also pushes the rest as _unsubscribed_,
+which is a suppression record rather than a mailing list), paces itself at five
+requests a second to leave half of Resend's ten-per-second budget for the live
+site, and is safe to re-run or interrupt: every write is an upsert keyed on the
+address, and nothing is ever deleted. Failures are named at the end rather than
+counted, and re-running retries them. ⚠ It needs a Resend key and the database
+in the same process, so it runs from a machine that has both — it cannot run
+itself on the deployment.
+
+### Testing it without deploying
+
+`npm run webhook:ping` signs an event exactly as Resend does and posts it to
+your own API — **no tunnel, no Resend account, no deployment**. A signature is
+HMAC arithmetic over the bytes, so anything holding the same
+`RESEND_WEBHOOK_SECRET` can produce one, which is the whole reason that secret
+is a secret.
+
+```bash
+# Any long random value works locally; it only has to MATCH on both sides.
+echo "RESEND_WEBHOOK_SECRET=whsec_$(head -c 24 /dev/urandom | base64)" >> .env
+
+npm run dev:memory                                     # or npm run dev
+npm run webhook:ping -- --email=you@example.com        # an unsubscribe
+npm run webhook:ping -- --email=you@example.com --resubscribe
+npm run webhook:ping -- --type=email.complained --email=you@example.com
+npm run webhook:ping -- --forged                       # watch it refused: 400
+```
+
+⚠ **The person has to already be in the audience.** Nothing here creates one, so
+subscribe on the site (or `POST /api/subscribe`) first, then ping — otherwise
+the route answers 200 having matched nobody, which is correct and looks like
+nothing happened.
+
+The failures are worth firing on purpose. `--forged` proves the refusal;
+changing the secret on one side only proves the same thing the other way; and a
+`503` means the API has no secret and needs the variable **and a restart**.
+
+What this does NOT prove is the Resend end — that the dashboard webhook is
+pointed at the right URL and subscribed to the right events. For that the API
+has to be reachable from the internet, so put a tunnel in front of it and use
+that hostname as the endpoint:
+
+```bash
+cloudflared tunnel --url http://localhost:4000    # no account needed
+# or: ngrok http 4000
+```
+
+Then create the webhook in Resend against `https://…/api/webhooks/resend`, paste
+**its** signing secret into `.env`, restart, and use the dashboard's own send-test
+button. ⚠ The tunnel hostname changes every time it restarts, and the webhook in
+Resend does not follow it.
+
+Status codes are deliberate: **503** with no secret configured (Resend retries,
+so nothing is lost while it is being set up), **400** on a signature that does
+not verify (a 4xx stops the retries — it will not verify on the fifth attempt
+either), **200** for anything understood including events deliberately ignored,
+and **500** only when a database write failed, which is the one case worth
+being sent again.
+
+⚠ **The sync is not covered end-to-end by `npm run smoke`.** The suite empties
+`RESEND_API_KEY`, so what it proves is that every form works with the sync off
+and that the webhook refuses what it should. The push itself is checked by hand
+against a real key — subscribe on the site, then look for the contact and its
+`source` property in the dashboard.
+
 ## Countries
 
 Every content document carries `countries: [String]`, and an **empty list means
@@ -195,6 +441,11 @@ Four things the platform makes different, all handled in `api/index.js`:
   `/api/content` makes several queries, so each one pays the round trip twice
   over from a distant region. Vercel's default `iad1` puts Washington between
   a Bangalore visitor and a Mumbai database.
+- **The webhook's raw body survives**, because the request stream is handed
+  straight to Express and `routes/webhooks.js` reads it itself. ⚠ Anything that
+  reads `req.body` on the platform's own request object before Express sees it
+  consumes that stream, and Resend signatures stop verifying with no other
+  symptom.
 - **A request body over 4.5MB is rejected before the function runs**, so
   `MAX_UPLOAD_BYTES` drops to 4MB when `VERCEL` is set. The CMS checks the same
   limit in the browser (`VITE_MAX_UPLOAD_MB`) so an oversized image is refused
@@ -234,10 +485,11 @@ src/
   models/            Event · Blog · Podcast (show + episodes) · Promo · User
   routes/
     public.js        the read-only API
+    webhooks.js      Resend calling us — raw body, signature checked
     admin.js         everything behind a sign-in
     crud.js          the shared list/create/update/delete router
     auth.js          sign in, /me, change password
-  lib/               countries · serialize · errors · tokens
+  lib/               countries · serialize · errors · tokens · contacts
   middleware/        auth · validate · error
   validators/        the Zod write schemas
 scripts/             seed · create-admin · smoke

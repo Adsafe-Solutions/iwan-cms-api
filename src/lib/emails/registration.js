@@ -45,6 +45,7 @@ const detailRow = (label, value) => `
  * @returns {{subject: string, html: string, text: string}}
  */
 export function renderRegistrationConfirmation({
+  unsubscribeUrl = "",
   name = "",
   eventTitle = "",
   when = "",
@@ -135,7 +136,16 @@ ${button}
 
         <tr>
           <td style="background-color:${BRAND.mist};border-top:1px solid ${BRAND.line};padding:18px 32px;">
-            <p style="margin:0;font-family:${FONT};font-size:12px;line-height:18px;color:${BRAND.muted};">You are receiving this because you registered for an event with ${escapeHtml(brandName)}.</p>
+            <p style="margin:0;font-family:${FONT};font-size:12px;line-height:18px;color:${BRAND.muted};">You are receiving this because you registered for an event with ${escapeHtml(brandName)}.${
+              unsubscribeUrl
+                ? ` <a href="${escapeHtml(unsubscribeUrl)}" style="color:${BRAND.muted};text-decoration:underline;">Unsubscribe from our newsletter</a>.`
+                : ""
+            }</p>${
+              unsubscribeUrl
+                ? `
+            <p style="margin:8px 0 0 0;font-family:${FONT};font-size:12px;line-height:18px;color:${BRAND.muted};">Unsubscribing does not cancel your place at an event.</p>`
+                : ""
+            }
           </td>
         </tr>
 
@@ -160,6 +170,17 @@ ${button}
     "Can no longer make it? Just reply to this email and let us know, so we can offer your spot to someone else.",
     "",
     `— ${brandName}`,
+    /* ⚠ In the text alternative too, and spread rather than filtered: a client
+       rendering text only would otherwise show a message with no way off the
+       list at all. Blank lines are meaningful here, so the pair goes in
+       together or not at all. */
+    ...(unsubscribeUrl
+      ? [
+          "",
+          `Unsubscribe from our newsletter: ${unsubscribeUrl}`,
+          "(This does not cancel your place at an event.)",
+        ]
+      : []),
   ]
     .filter((line) => line !== false && line !== undefined)
     .join("\n");

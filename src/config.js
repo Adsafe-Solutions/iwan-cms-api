@@ -25,6 +25,16 @@ export const CONFIG = {
      then only `onboarding@resend.dev` sends, and only to the account owner. */
   mailFrom: process.env.MAIL_FROM ?? "",
   mailReplyTo: process.env.MAIL_REPLY_TO ?? "",
+
+  /* ⚠ The SIGNING SECRET for Resend's own calls back — a different credential
+     from the API key, issued per webhook on its details page and starting
+     `whsec_`. Unset means routes/webhooks.js answers 503 and Resend keeps
+     retrying, which is the right state while it is being set up. */
+  resendWebhookSecret: process.env.RESEND_WEBHOOK_SECRET ?? "",
+  /* Optional. The Resend SEGMENT mirrored subscribers are added to — the list a
+     broadcast is sent to. With none set they still become contacts on the
+     account, just ungrouped. */
+  resendSegmentId: process.env.RESEND_SEGMENT_ID ?? "",
   /* Builds the event link in the confirmation. Optional — the mail omits it. */
   siteUrl: process.env.SITE_URL ?? "",
 
@@ -35,6 +45,14 @@ export const CONFIG = {
   mailTo: list(process.env.MAIL_TO),
   /* Deep-links the notification at the right CMS screen. Optional. */
   cmsUrl: (process.env.CMS_URL ?? "").replace(/\/$/, ""),
+
+  /* ⚠ THIS API'S OWN PUBLIC ADDRESS — the one a third party reaches it on,
+     which is the one thing a process cannot work out about itself: behind a
+     proxy it sees a port, not the hostname the world uses. The unsubscribe
+     link in a transactional email is built from it — see lib/tokens.js — and
+     without it that link and its headers are dropped rather than pointing
+     somewhere useless. */
+  apiUrl: (process.env.API_URL ?? "").replace(/\/$/, ""),
 
   /* How many public form submissions one address may make per ten minutes.
      ⚠ Shared across subscribe, contact, volunteer and career — the limit is on
@@ -101,6 +119,17 @@ export function assertConfig() {
      send would silently notify nobody. */
   if (CONFIG.mailTo.length && !CONFIG.resendApiKey) {
     problems.push("MAIL_TO is set but RESEND_API_KEY is not — nothing can be sent");
+  }
+
+  /* ⚠ Same trap once more. A segment named with no key would look like the
+     audience was being mirrored while nothing left the process. The webhook
+     secret is NOT checked here: verifying Resend's calls back is a separate
+     job from sending, and an account can perfectly well take the unsubscribes
+     from a broadcast it sends from the dashboard. */
+  if (CONFIG.resendSegmentId && !CONFIG.resendApiKey) {
+    problems.push(
+      "RESEND_SEGMENT_ID is set but RESEND_API_KEY is not — no contact can be synced"
+    );
   }
 
   /* ⚠ Same all-or-nothing rule as mail. A half-set R2 block would let the CMS

@@ -9,7 +9,7 @@
    cached. */
 
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { MongoMemoryServer } from "mongodb-memory-server";
 
 /* Generated per run, never written as literals. A fixed string would leak
@@ -48,6 +48,22 @@ process.env.MAIL_FROM = "";
    MAIL_TO set would have every smoke run emailing a real inbox. */
 process.env.MAIL_TO = "";
 process.env.CMS_URL = "";
+/* ⚠ And the contact sync, which reaches Resend on every SUBSCRIBE rather than
+   only when mail is sent — a developer with a real key would have had this
+   suite writing its fixtures into the live Resend audience. Emptying the key
+   above already switches it off; the segment is emptied so a half-set pair
+   cannot fail assertConfig on someone else's machine. */
+process.env.RESEND_SEGMENT_ID = "";
+/* ⚠ A REAL, generated signing secret — and it costs no network at all, because
+   verifying a signature is arithmetic on the bytes in hand. So the webhook is
+   tested properly here: a correctly signed event really does unsubscribe
+   someone, and a forged one really is refused. Generated per run for the same
+   reason the passwords above are.
+
+   ⚠ `whsec_` then BASE64: that prefix and encoding are the format Resend
+   issues, and the secret is the decoded bytes. A raw string here would verify
+   against nothing. */
+process.env.RESEND_WEBHOOK_SECRET = `whsec_${randomBytes(24).toString("base64")}`;
 
 /* ⚠ EMPTIED for the same reason, and it bit exactly the same way: config.js
    loads .env, so a developer with real R2 credentials had this suite PUTting
@@ -2743,6 +2759,403 @@ await check("⚠ a viewer cannot write the audience", async () => {
     body: { note: "nope" },
   });
   assert.equal(status, 403);
+});
+
+console.log("\nthe Resend contact sync");
+
+/* ⚠ These do NOT reach Resend. RESEND_API_KEY is empty for this run, so the
+   sync is switched off and what is proved here is the property that matters:
+   every form still works, and nothing waits on a third party. The push itself
+   is covered by hand against a real key — see the README.
+
+   The WEBHOOK half is tested for real, because its interesting behaviour is
+   what it refuses. */
+
+await check("the contact sync is off without a key, and says so", async () => {
+  const { syncContact, removeContact, CONTACTS_ENABLED } =
+    await import("../src/lib/contacts.js");
+  assert.equal(CONTACTS_ENABLED, false);
+  assert.deepEqual(await syncContact({ email: "nobody@example.com" }), {
+    synced: false,
+    reason: "contacts-disabled",
+  });
+  assert.deepEqual(await removeContact("nobody@example.com"), {
+    removed: false,
+    reason: "contacts-disabled",
+  });
+});
+
+await check("subscribing still succeeds with the contact sync off", async () => {
+  const { status } = await call("POST", "/api/subscribe", {
+    body: { email: "mirror-off@example.com" },
+  });
+  assert.equal(status, 201);
+
+  /* ⚠ The row is stored either way — that is the whole point of the sync being
+     fire-and-forget. */
+  const { body } = await call("GET", "/api/admin/audience?q=mirror-off", { token });
+  assert.equal(body.items.length, 1);
+  assert.equal(body.items[0].subscribed, true);
+});
+
+/* Signs a payload the way Resend does: HMAC-SHA256 over `id.timestamp.body`,
+   keyed on the DECODED secret, sent as `v1,<base64>`. ⚠ Signing the exact string
+   that is posted, not an object re-encoded on the way out — which is the same
+   property the route depends on at the other end. */
+const svixPost = async (payload, { secret = process.env.RESEND_WEBHOOK_SECRET } = {}) => {
+  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  const id = `msg_${randomBytes(6).toString("hex")}`;
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = createHmac("sha256", key)
+    .update(`${id}.${timestamp}.${payload}`)
+    .digest("base64");
+
+  return fetch(`${base}/api/webhooks/resend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "svix-id": id,
+      "svix-timestamp": timestamp,
+      "svix-signature": `v1,${signature}`,
+    },
+    body: payload,
+  });
+};
+
+await check("a signed unsubscribe from Resend reaches the audience", async () => {
+  /* ⚠ THE POINT OF THE WHOLE ROUTE. Someone clicking unsubscribe at the bottom
+     of a broadcast is recorded by Resend, not here; without this the CMS goes
+     on believing they are subscribed. */
+  const res = await svixPost(
+    JSON.stringify({
+      type: "contact.updated",
+      data: { email: "mirror-off@example.com", unsubscribed: true },
+    })
+  );
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).result, "unsubscribed");
+
+  const { body } = await call("GET", "/api/admin/audience?q=mirror-off", { token });
+  assert.equal(body.items[0].subscribed, false, "the unsubscribe never landed");
+});
+
+await check("a signed re-subscribe puts them back", async () => {
+  const res = await svixPost(
+    JSON.stringify({
+      type: "contact.updated",
+      data: { email: "mirror-off@example.com", unsubscribed: false },
+    })
+  );
+  assert.equal(res.status, 200);
+
+  const { body } = await call("GET", "/api/admin/audience?q=mirror-off", { token });
+  assert.equal(body.items[0].subscribed, true);
+});
+
+await check("a spam complaint unsubscribes every address it names", async () => {
+  const res = await svixPost(
+    JSON.stringify({
+      type: "email.complained",
+      data: { email_id: "e1", to: ["mirror-off@example.com"] },
+    })
+  );
+  assert.equal(res.status, 200);
+
+  const { body } = await call("GET", "/api/admin/audience?q=mirror-off", { token });
+  assert.equal(body.items[0].subscribed, false, "a complaint left them subscribed");
+});
+
+await check("⚠ a webhook NEVER creates a person", async () => {
+  /* A leaked signing secret must not become a write to the audience list.
+     recordAudience is the one way in. */
+  const res = await svixPost(
+    JSON.stringify({
+      type: "contact.created",
+      data: { email: "never-seen@example.com", unsubscribed: false },
+    })
+  );
+  assert.equal(res.status, 200);
+
+  const { body } = await call("GET", "/api/admin/audience?q=never-seen", { token });
+  assert.equal(body.items.length, 0, "a webhook inserted somebody");
+});
+
+await check("an unknown event type is acknowledged, not retried", async () => {
+  /* ⚠ Resend's event list grows. A 4xx here would look like a bug to whoever
+     added the subscription, and a 5xx would have Resend retrying it forever. */
+  const res = await svixPost(
+    JSON.stringify({ type: "email.opened", data: { to: ["mirror-off@example.com"] } })
+  );
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).result, "ignored");
+});
+
+await check("a signature from the WRONG secret is refused", async () => {
+  const res = await svixPost(
+    JSON.stringify({
+      type: "contact.updated",
+      data: { email: "quiet-sub@example.com", unsubscribed: true },
+    }),
+    { secret: `whsec_${randomBytes(24).toString("base64")}` }
+  );
+  assert.equal(res.status, 400, "a signature from another secret was accepted");
+
+  const { body } = await call("GET", "/api/admin/audience?q=quiet-sub", { token });
+  assert.equal(body.items[0].subscribed, true, "it changed a subscription anyway");
+});
+
+await check("a tampered body is refused even with a valid signature", async () => {
+  /* ⚠ The signature covers the BYTES. Signing one payload and posting another
+     is exactly what a replay looks like. */
+  const signed = JSON.stringify({
+    type: "contact.updated",
+    data: { email: "quiet-sub@example.com", unsubscribed: false },
+  });
+  const key = Buffer.from(
+    process.env.RESEND_WEBHOOK_SECRET.replace(/^whsec_/, ""),
+    "base64"
+  );
+  const id = "msg_tampered";
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = createHmac("sha256", key)
+    .update(`${id}.${timestamp}.${signed}`)
+    .digest("base64");
+
+  const res = await fetch(`${base}/api/webhooks/resend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "svix-id": id,
+      "svix-timestamp": timestamp,
+      "svix-signature": `v1,${signature}`,
+    },
+    /* The signature above is for `unsubscribed: false`. */
+    body: signed.replace('"unsubscribed":false', '"unsubscribed":true'),
+  });
+  assert.equal(res.status, 400);
+
+  const { body } = await call("GET", "/api/admin/audience?q=quiet-sub", { token });
+  assert.equal(body.items[0].subscribed, true);
+});
+
+await check("a forged webhook cannot unsubscribe anyone", async () => {
+  /* The attack this endpoint exists to refuse: a POST carrying a signature
+     that is not one, claiming a real subscriber has opted out.
+
+     ⚠ Asserted against quiet-sub rather than mirror-off, which the complaint
+     check above deliberately leaves UNSUBSCRIBED — a target that was already
+     false would pass this test whether or not the forgery was refused. */
+  const res = await fetch(`${base}/api/webhooks/resend`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "svix-id": "msg_forged",
+      "svix-timestamp": String(Math.floor(Date.now() / 1000)),
+      "svix-signature": "v1,not-a-real-signature",
+    },
+    body: JSON.stringify({
+      type: "contact.updated",
+      data: { email: "quiet-sub@example.com", unsubscribed: true },
+    }),
+  });
+  assert.equal(res.status, 400);
+
+  const { body } = await call("GET", "/api/admin/audience?q=quiet-sub", { token });
+  assert.equal(body.items[0].subscribed, true, "a forged webhook changed a subscription");
+});
+
+await check("the webhook reads its own raw body", async () => {
+  /* ⚠ Guards the mounting order in app.js, and the guard is the whole reason
+     the checks above can pass at all: express.json() in front of this router
+     would consume the bytes, and a signature computed over a re-encoded object
+     never matches. Signing a payload whose key order and spacing NO parser
+     would reproduce is what proves the raw bytes arrived — a re-encode drops
+     the spaces and this fails. */
+  const payload =
+    '{ "type" : "contact.updated" ,\n  "data" : { "email" : "mirror-off@example.com" , "unsubscribed" : false } }';
+  const res = await svixPost(payload);
+  assert.equal(res.status, 200, "something parsed the body before the webhook did");
+  assert.equal((await res.json()).result, "subscribed");
+});
+
+await check("an endpoint with no signing secret refuses to act", async () => {
+  /* ⚠ 503 and not 200: Resend RETRIES a 503, so events queue up rather than
+     being lost while the variable is still being set. Restored immediately —
+     the checks above share this process. */
+  const configured = process.env.RESEND_WEBHOOK_SECRET;
+  const { CONFIG } = await import("../src/config.js");
+  CONFIG.resendWebhookSecret = "";
+  try {
+    const res = await svixPost(
+      JSON.stringify({
+        type: "contact.updated",
+        data: { email: "mirror-off@example.com", unsubscribed: true },
+      }),
+      { secret: configured }
+    );
+    assert.equal(res.status, 503);
+
+    const { body } = await call("GET", "/api/admin/audience?q=mirror-off", { token });
+    assert.equal(body.items[0].subscribed, true, "it acted without being able to verify");
+  } finally {
+    CONFIG.resendWebhookSecret = configured;
+  }
+});
+
+console.log("\nthe unsubscribe link");
+
+/* ⚠ Resend hosts this flow for BROADCASTS and does none of it for the
+   transactional mail this API sends, so all of it is ours and all of it is
+   tested here — no network, no key, no mail. */
+
+await check("a signed link unsubscribes, and says so in a page", async () => {
+  await call("POST", "/api/subscribe", { body: { email: "unsub-me@example.com" } });
+
+  const { signUnsubscribe } = await import("../src/lib/tokens.js");
+  const res = await fetch(
+    `${base}/api/unsubscribe?t=${encodeURIComponent(signUnsubscribe("unsub-me@example.com"))}`
+  );
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type") ?? "", /text\/html/);
+
+  const html = await res.text();
+  assert.match(html, /You have been unsubscribed/);
+  /* ⚠ The page must say what has NOT stopped, or someone assumes their place
+     at an event is gone too. */
+  assert.match(html, /does not cancel a booking/);
+
+  const { body } = await call("GET", "/api/admin/audience?q=unsub-me", { token });
+  assert.equal(body.items[0].subscribed, false, "the unsubscribe never landed");
+});
+
+await check("⚠ the address is NOT in the link, and cannot be forged", async () => {
+  /* A raw `?email=` would let anyone unsubscribe anyone by typing an address. */
+  const { signUnsubscribe } = await import("../src/lib/tokens.js");
+  const link = signUnsubscribe("someone@example.com");
+  assert.ok(!link.includes("someone@example.com"), "the address is in the link verbatim");
+
+  await call("POST", "/api/subscribe", { body: { email: "safe@example.com" } });
+
+  for (const forged of ["safe@example.com", "not-a-token", `${link}x`, ""]) {
+    const res = await fetch(`${base}/api/unsubscribe?t=${encodeURIComponent(forged)}`);
+    assert.equal(res.status, 400, `a forged token was accepted: ${forged}`);
+    assert.match(await res.text(), /did not work/);
+  }
+
+  const { body } = await call("GET", "/api/admin/audience?q=safe@example.com", { token });
+  assert.equal(body.items[0].subscribed, true, "a forged link unsubscribed somebody");
+});
+
+await check("⚠ a SESSION token cannot be spent as an unsubscribe link", async () => {
+  /* Both are signed with JWT_SECRET; only the `purpose` claim separates them. */
+  const res = await fetch(`${base}/api/unsubscribe?t=${encodeURIComponent(token)}`);
+  assert.equal(res.status, 400);
+});
+
+await check("the one-click POST answers 200 and nothing else", async () => {
+  /* ⚠ RFC 8058. Gmail and Apple post this from their own servers when someone
+     presses the unsubscribe button beside the sender name; a redirect or an
+     HTML body reads as a FAILED unsubscribe to them. */
+  await call("POST", "/api/subscribe", { body: { email: "one-click@example.com" } });
+
+  const { signUnsubscribe } = await import("../src/lib/tokens.js");
+  const res = await fetch(
+    `${base}/api/unsubscribe?t=${encodeURIComponent(signUnsubscribe("one-click@example.com"))}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "List-Unsubscribe=One-Click",
+    }
+  );
+  assert.equal(res.status, 200);
+  assert.equal((await res.text()).trim(), "", "the one-click POST returned a body");
+
+  const { body } = await call("GET", "/api/admin/audience?q=one-click", { token });
+  assert.equal(body.items[0].subscribed, false);
+});
+
+await check("⚠ a bad token still answers the provider 200 on POST", async () => {
+  /* A 4xx teaches Gmail that this sender's unsubscribe button is broken, and
+     nobody ever sees the error. */
+  const res = await fetch(`${base}/api/unsubscribe?t=rubbish`, { method: "POST" });
+  assert.equal(res.status, 200);
+});
+
+await check("unsubscribing twice is not an error", async () => {
+  const { signUnsubscribe } = await import("../src/lib/tokens.js");
+  const link = `${base}/api/unsubscribe?t=${encodeURIComponent(signUnsubscribe("one-click@example.com"))}`;
+  assert.equal((await fetch(link)).status, 200);
+  /* Nor is unsubscribing somebody who was never in the audience at all. */
+  const stranger = `${base}/api/unsubscribe?t=${encodeURIComponent(signUnsubscribe("nobody-here@example.com"))}`;
+  assert.equal((await fetch(stranger)).status, 200);
+});
+
+await check("the page fetches nothing and is not indexable", async () => {
+  const { signUnsubscribe } = await import("../src/lib/tokens.js");
+  const res = await fetch(
+    `${base}/api/unsubscribe?t=${encodeURIComponent(signUnsubscribe("unsub-me@example.com"))}`
+  );
+  /* ⚠ The app-wide CSP is off because this API served no HTML until now, so
+     the page carries its own. */
+  assert.match(res.headers.get("content-security-policy") ?? "", /default-src 'none'/);
+  assert.match(res.headers.get("x-robots-tag") ?? "", /noindex/);
+
+  const html = await res.text();
+  for (const tag of ["<script", "<img", "<link"]) {
+    assert.ok(!html.includes(tag), `the page pulls in ${tag}`);
+  }
+});
+
+await check("⚠ the footer link is for SUBSCRIBERS only", async () => {
+  /* The confirmation goes to everyone who registers, and most never ticked the
+     newsletter box. Offering to unsubscribe them from something they never
+     joined invites "I never signed up for this".
+     ⚠ The HEADER is unconditional — only the visible footer is not. */
+  const { isSubscribed } = await import("../src/lib/audience.js");
+
+  await call("POST", "/api/subscribe", { body: { email: "on-the-list@example.com" } });
+  assert.equal(await isSubscribed("on-the-list@example.com"), true);
+
+  /* Registered for an event, never subscribed. */
+  await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: { answers: REG({ email: "just-registered@example.com" }) },
+  });
+  assert.equal(await isSubscribed("just-registered@example.com"), false);
+
+  /* Somebody this API has never seen, and a blank address — neither is an
+     error, both are "no". */
+  assert.equal(await isSubscribed("stranger@example.com"), false);
+  assert.equal(await isSubscribed(""), false);
+});
+
+await check("the template renders the footer only when it is given a link", async () => {
+  const { renderRegistrationConfirmation } =
+    await import("../src/lib/emails/registration.js");
+  const shown = renderRegistrationConfirmation({
+    eventTitle: "Fishing Day",
+    unsubscribeUrl: "https://api.example.com/api/unsubscribe?t=abc",
+  });
+  assert.match(shown.html, /Unsubscribe from our newsletter/);
+  /* ⚠ And says what it does NOT do, in both alternatives. */
+  assert.match(shown.html, /does not cancel your place/);
+  assert.match(shown.text, /Unsubscribe from our newsletter: https:/);
+
+  const hidden = renderRegistrationConfirmation({ eventTitle: "Fishing Day" });
+  assert.ok(!hidden.html.includes("Unsubscribe"));
+  assert.ok(!hidden.text.includes("Unsubscribe"));
+});
+
+await check("no link and no headers when API_URL is unset", async () => {
+  /* ⚠ A link to localhost in a real inbox is worse than no link. API_URL is
+     empty for this run, so this is the state under test. */
+  const { unsubscribeUrl } = await import("../src/lib/tokens.js");
+  assert.equal(unsubscribeUrl("someone@example.com"), "");
+
+  const { renderRegistrationConfirmation } =
+    await import("../src/lib/emails/registration.js");
+  const { html, text } = renderRegistrationConfirmation({ eventTitle: "Fishing Day" });
+  assert.ok(!html.includes("Unsubscribe"), "a dead unsubscribe link was rendered");
+  assert.ok(!text.includes("Unsubscribe"));
 });
 
 console.log("\nthe one call the site makes");
