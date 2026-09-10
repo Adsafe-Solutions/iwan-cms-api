@@ -520,3 +520,4 @@ model, a schema, a serialiser and one line in `routes/admin.js`.
 - The seeded promo is a **draft** on purpose — the site's `promo.js` is
   placeholder copy for a campaign that does not exist, and publishing it should
   be a deliberate act.
+
