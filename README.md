@@ -117,6 +117,141 @@ overwrite a post an editor has since rewritten; `--dry` shows what it would do.
 The original `body` blocks are left in place — this conversion happens once, and
 keeping the source means it can be redone if the mapping turns out wrong.
 
+## Editing the emails in Resend
+
+**The designed templates live in Resend** — the same files the site repo keeps
+in `emails/`, uploaded there. This API looks one up on every send and uses it
+when it finds one; `src/lib/emails/` is the fallback for when it does not.
+
+⚠ **It is matched on the template's ALIAS.** Resend generates the `id` itself (a
+UUID nobody can choose) and the `name` is a display label somebody will rename
+the first time they tidy up — the alias is the only handle worth hard-coding.
+Folders in the dashboard make no difference: a template has no folder field, so
+file them however you like as long as the alias matches.
+
+⚠ **Tried in order, the first published one wins**, so an account can override
+everything with one template or just one country:
+
+| template id                       | for                    |
+| --------------------------------- | ---------------------- |
+| `iwan-registration-{in\|ca}`      | that country           |
+| `iwan-registration`               | any registration       |
+| `iwan-subscribe-welcome-{in\|ca}` | that country's welcome |
+| `iwan-subscribe-welcome`          | any welcome            |
+
+### ⚠ The variable names are NOT the tokens in the HTML file
+
+Resend **reserves** `FIRST_NAME`, `LAST_NAME`, `EMAIL`, `UNSUBSCRIBE_URL`,
+`contact` and `this`, and refuses them as custom variables. So a template
+uploaded to Resend must use the **lower-case** names, which are what this API
+sends:
+
+```
+registration   first_name · event_title · event_date · event_start · event_end
+               event_venue · event_url · event_image · directions_url
+               unsubscribe_url
+welcome        first_name · site_url · unsubscribe_url
+```
+
+⚠ **Declare every one on the template, each with a fallback.** Resend's syntax is
+`{{{triple_braces}}}`, and a variable that is neither declared nor given a
+fallback makes the send **fail** with a validation error rather than rendering
+blank.
+
+⚠ **Do not use `{{{RESEND_UNSUBSCRIBE_URL}}}`** in these. Resend substitutes it
+for Broadcasts only; in a transactional send it ships as literal text beside a
+dead link. `unsubscribe_url` carries this API's own signed link, which works.
+
+⚠ **`directions_url`** is built the way the site's `lib/map.js` builds it —
+coordinates where the event has them, the venue text otherwise — so the email
+and the page pin the same place.
+
+⚠ **Published only.** A draft is somebody mid-edit, and half-written copy
+reaching a registrant is worse than last month's wording, so a draft is treated
+as absent. ⚠ **Delete the template and the code takes over again** on the next
+instance.
+
+### The built-in message is a fallback, not a second design
+
+`src/lib/emails/registration.js` renders a plainer confirmation, and only when
+Resend has no published template or cannot be reached. ⚠ **It is deliberately
+NOT a copy of the designed file.** Two copies of the same 40KB layout in two
+repos drift, and the stale one is the one that sends. ⚠ **Both paths build their
+values in ONE place** — `registrationValues` in that same file — so the fallback
+and the Resend template always get the same facts under the same names.
+
+⚠ **The subject comes from the template**, and the code's subject is used only
+when the template has none — passing one always would override what was written
+in Resend.
+
+⚠ **The lookup is cached for the life of the process, misses included**, so an
+account with no templates does not pay a lookup on every send. A template added
+in Resend reaches a running server on its next restart; on Vercel, where an
+instance lives minutes, that is close to immediate. A lookup that fails means
+the code is used — Resend being unreachable must never become an email nobody
+receives.
+
+⚠ **Only the two above.** The notifications to Iwan's own inbox are internal and
+always come from the code.
+
+## Subscribing
+
+Ticking a newsletter box — in the site footer, or on an event registration,
+contact, volunteer or career form — does three things: the person joins the
+`audience` collection, they are pushed to Resend as a contact, and they get one
+welcome email.
+
+⚠ **The welcome is sent ONCE, EVER**, per `welcomeSentAt` on the audience row.
+Somebody who subscribes, unsubscribes and subscribes again is not greeted twice,
+and somebody who ticks the box on a registration form having subscribed last
+year is not greeted at all. It is a _separate_ message from the booking
+confirmation, because they say different things and only one of them is
+marketing.
+
+⚠ **The stamp is CLAIMED before the send, not written after.** Two submissions
+landing together would otherwise both read "not sent yet" and both send. ⚠ **A
+failed send gives it back**, or one Resend outage would mean that person is
+never greeted at all — the row would claim it had been done.
+
+⚠ **The welcome is refused without an unsubscribe link.** It is the one message
+here that is marketing rather than transactional, and a marketing email with no
+way off the list is what gets a sending domain blocked. No `API_URL` means no
+link, which means no welcome — see the unsubscribe section.
+
+`POST /api/subscribe` answers `{ ok: true, alreadySubscribed: boolean }`, so the
+site can say _"you are already on the list"_ rather than a second _"thank you for
+subscribing"_. ⚠ **That is the one form here that says anything back**, and it is
+a deliberate trade: it tells whoever posted the form whether that address is
+already subscribed, so an address can be tested. The site's own form is worth
+it; treat the flag as public.
+
+## ⚠ Work after the response, and Vercel
+
+**Fire-and-forget does not work on Vercel.** A serverless function is frozen the
+moment its response is sent, so a promise nobody is waiting on is abandoned
+part-way — the sign-up is stored, the 201 goes out, and the confirmation email
+is never sent. Nothing errors and nothing is logged, which is what makes it so
+hard to see. On a normal always-on server the same promise finishes perfectly
+well, and waiting for it would only make every form slower.
+
+`lib/background.js` is the one place that difference is expressed, the same way
+`storage.js` already branches on `VERCEL` for the upload limit. Everything that
+used to be started and abandoned now goes through it:
+
+```js
+await notify({ … });            // Iwan's heads-up
+await welcome(person);          // the subscriber's welcome
+await mirrorContact({ … });     // the push to Resend
+await background("registration confirmation", async () => { … });
+```
+
+⚠ **Always awaited, and always BEFORE the response.** Off Vercel these return
+immediately and the work finishes behind the response exactly as it used to; on
+Vercel awaiting is the only thing keeping the function alive long enough for the
+work to happen. ⚠ **None of it can fail a form** — every one of these swallows
+its own errors, so an outage delays a response slightly rather than turning a
+booked place into an error the person retries.
+
 ## The Resend audience
 
 Everyone who **subscribes** is mirrored into Resend as a contact, so a

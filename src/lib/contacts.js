@@ -1,5 +1,6 @@
 import { CONFIG } from "../config.js";
 import { resend } from "./resendClient.js";
+import { background } from "./background.js";
 
 /* The audience list, mirrored into Resend.
 
@@ -73,12 +74,6 @@ async function ensureProperties() {
         if (created.error && !alreadyExists(created.error)) {
           throw new Error(created.error.message ?? `could not create ${property.key}`);
         }
-      }
-
-      if (missing.length) {
-        console.log(
-          `[resend] created contact properties: ${missing.map((p) => p.key).join(", ")}`
-        );
       }
     })().catch((err) => {
       ensured = null;
@@ -229,20 +224,14 @@ export async function removeContact(email) {
   }
 }
 
-/* ⚠ Fire-and-forget, with the rejection swallowed — the same shape as `notify`
-   in mail.js and for the same reason. syncContact already never throws, so this
-   is belt and braces against a future edit that makes it: an unhandled
-   rejection takes the process down on Node. */
-export const mirrorContact = (person) => {
-  void syncContact(person).catch((err) =>
-    console.error("Contact sync threw past its own guard:", err)
-  );
-};
+/* ⚠ MUST BE AWAITED, and before the response — the same shape as `notify` in
+   mail.js and for the same reason. See lib/background.js: a promise nobody
+   waits on is abandoned the moment a Vercel function answers, which is exactly
+   why a subscriber could be stored here and never appear in Resend. */
+export const mirrorContact = (person) =>
+  background("contact sync", () => syncContact(person));
 
-export const forgetContact = (email) => {
-  void removeContact(email).catch((err) =>
-    console.error("Contact removal threw past its own guard:", err)
-  );
-};
+export const forgetContact = (email) =>
+  background("contact removal", () => removeContact(email));
 
 export default syncContact;

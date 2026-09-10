@@ -1,5 +1,13 @@
 /* The confirmation someone gets after registering for an event.
 
+   ⚠ THIS IS THE FALLBACK, NOT THE DESIGN. The real templates live in RESEND —
+   the same files the site repo keeps in `emails/`, uploaded there — and
+   lib/templates.js uses one whenever a published one exists. This renders only
+   when Resend has none, or cannot be reached: a plainer confirmation is worth
+   sending, and an account with no templates yet still works.
+
+  
+
    ⚠ THE ONE PLACE HEX COLOURS BELONG. An email has no Tailwind and no build
    step, so colours must be inline or clients drop them. The values are copied
    from the site's `ocean` theme; change them there first.
@@ -38,6 +46,56 @@ const detailRow = (label, value) => `
                 <td style="padding:0 0 14px 0;font-family:${FONT};font-size:15px;line-height:22px;color:${BRAND.ink};font-weight:600;vertical-align:top;">${escapeHtml(value)}</td>
               </tr>`;
 
+/* Matches the site's own `lib/map.js`, deliberately: the email and the page
+   must pin the same place. Coordinates win where an event has them, otherwise
+   the venue text, and the address is the last resort. */
+export const directionsUrl = (event = {}) => {
+  const query =
+    Array.isArray(event.coords) && event.coords.length === 2
+      ? event.coords.join(",")
+      : event.venue || event.address || "";
+  return query
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`
+    : "";
+};
+
+/* ⚠ The photograph in the designed template is THE EVENT'S OWN, so a person
+   sees the thing they registered for rather than a stock crowd. An event
+   without one falls back to the hero the template shipped with — a template
+   variable that arrives empty renders as a broken image, and Resend refuses a
+   send outright when a declared variable has neither value nor fallback. */
+export const DEFAULT_EVENT_IMAGE = "https://cdn.iwan.community/iwan-youth-hero.webp";
+
+/* ⚠ FIRST name only. The designed template greets with it — "Assalamu alaikum
+   Aisha" — and a full name there reads like a letter from a bank. */
+export const firstNameOf = (name = "") => String(name).trim().split(/\s+/)[0] ?? "";
+
+/**
+ * The values a confirmation is built from, in ONE place — this file renders
+ * them, and lib/mail.js sends the same set (lower-cased) to a Resend template.
+ * One definition, so the two cannot drift.
+ */
+export function registrationValues({
+  name = "",
+  event = {},
+  eventTitle = "",
+  eventUrl = "",
+  unsubscribeUrl = "",
+} = {}) {
+  return {
+    FIRST_NAME: firstNameOf(name),
+    EVENT_TITLE: event.title || eventTitle,
+    EVENT_DATE: event.date ?? "",
+    EVENT_START: event.start ?? "",
+    EVENT_END: event.end ?? "",
+    EVENT_VENUE: [event.venue, event.address].filter(Boolean).join(", "),
+    EVENT_URL: eventUrl,
+    EVENT_IMAGE: event.img || DEFAULT_EVENT_IMAGE,
+    DIRECTIONS_URL: directionsUrl(event),
+    UNSUBSCRIBE_URL: unsubscribeUrl,
+  };
+}
+
 /**
  * Renders the confirmation. Every field is optional except the event title; a
  * missing venue or time drops its row rather than printing an empty one.
@@ -45,15 +103,37 @@ const detailRow = (label, value) => `
  * @returns {{subject: string, html: string, text: string}}
  */
 export function renderRegistrationConfirmation({
-  unsubscribeUrl = "",
+  /* The same shape the Resend template path builds — see registrationValues. */
   name = "",
+  event = {},
   eventTitle = "",
-  when = "",
-  where = "",
   eventUrl = "",
+  unsubscribeUrl = "",
+  /* ⚠ Gates the unsubscribe line. Registering is not subscribing, and most
+     people receiving this never ticked the box. */
+  subscribed = false,
   brandName = "Iwan Community",
 } = {}) {
-  const greeting = name ? `Hi ${name},` : "Hi,";
+  const values = registrationValues({
+    name,
+    event,
+    eventTitle,
+    eventUrl,
+    unsubscribeUrl,
+  });
+
+  eventTitle = values.EVENT_TITLE;
+  const when = [
+    values.EVENT_DATE,
+    [values.EVENT_START, values.EVENT_END].filter(Boolean).join("–"),
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const where = values.EVENT_VENUE;
+  eventUrl = values.EVENT_URL;
+  unsubscribeUrl = subscribed ? values.UNSUBSCRIBE_URL : "";
+
+  const greeting = values.FIRST_NAME ? `Hi ${values.FIRST_NAME},` : "Hi,";
   const subject = `You're registered: ${eventTitle}`;
 
   /* ⚠ The grey preview line beside the subject. Left unset, clients scrape the

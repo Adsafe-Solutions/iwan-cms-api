@@ -31,6 +31,16 @@ export const CONFIG = {
      `whsec_`. Unset means routes/webhooks.js answers 503 and Resend keeps
      retrying, which is the right state while it is being set up. */
   resendWebhookSecret: process.env.RESEND_WEBHOOK_SECRET ?? "",
+  /* ⚠ Which Resend TEMPLATE each message looks for, by alias. A published
+     template under one of these replaces the built-in message in `emails/`
+     without a deploy; nothing there means the code is used, which is how this
+     worked before templates existed. Overridable only because an account may
+     already have its own naming — the defaults are in lib/templates.js. */
+  templates: {
+    registration: process.env.RESEND_TEMPLATE_REGISTRATION ?? "",
+    welcome: process.env.RESEND_TEMPLATE_WELCOME ?? "",
+  },
+
   /* Optional. The Resend SEGMENT mirrored subscribers are added to — the list a
      broadcast is sent to. With none set they still become contacts on the
      account, just ungrouped. */
@@ -53,6 +63,13 @@ export const CONFIG = {
      without it that link and its headers are dropped rather than pointing
      somewhere useless. */
   apiUrl: (process.env.API_URL ?? "").replace(/\/$/, ""),
+
+  /* ⚠ Shared with the public site's Cloudflare Worker, which verifies Turnstile
+     and then forwards the submission with this in an X-Forward-Secret header.
+     Without it the Turnstile check is one hop a bot skips by posting here
+     directly — see middleware/forwarded.js. Unset means the check is off, and
+     the site's forms keep working. */
+  cmsForwardSecret: process.env.CMS_FORWARD_SECRET ?? "",
 
   /* How many public form submissions one address may make per ten minutes.
      ⚠ Shared across subscribe, contact, volunteer and career — the limit is on

@@ -61,6 +61,17 @@ const audienceSchema = new mongoose.Schema(
     /* An organiser's private note, same convention as a registration. */
     note: { type: String, trim: true, default: "" },
 
+    /* ⚠ THE WELCOME IS SENT ONCE, EVER. Somebody who subscribes from the
+       footer, unsubscribes, and subscribes again should not be greeted twice,
+       and somebody who ticks the box on a registration form having already
+       subscribed should not be greeted at all — they are already in.
+
+       ⚠ It is CLAIMED before the send, not stamped after: two submissions
+       landing together would otherwise both read "not sent yet" and both send.
+       A send that then fails clears it again, so the next attempt can try.
+       Null means never sent, which is also true of every row predating this. */
+    welcomeSentAt: { type: Date, default: null },
+
     lastSeenAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

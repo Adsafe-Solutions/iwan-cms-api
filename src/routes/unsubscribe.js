@@ -102,8 +102,9 @@ async function unsubscribe(token) {
      Resend would go on believing they are subscribed and the next broadcast
      would reach them. This is the mirror image of what webhooks.js does for an
      unsubscribe made on Resend's side. Not awaited — the person is unsubscribed
-     here either way, and this page must not wait on a third party. */
-  mirrorContact({ email, subscribed: false });
+     here either way, and off Vercel this returns before the push finishes. On
+     Vercel it is awaited, because nothing outlives the response there. */
+  await mirrorContact({ email, subscribed: false });
 
   return true;
 }

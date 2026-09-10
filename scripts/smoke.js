@@ -3002,6 +3002,262 @@ await check("an endpoint with no signing secret refuses to act", async () => {
   }
 });
 
+console.log("\nTurnstile cannot be skipped");
+
+await check("⚠ a form posted DIRECTLY to the API is refused", async () => {
+  /* ⚠ THE POINT: the site's Worker checks Turnstile and then forwards with a
+     shared secret. This API is on its own hostname, so without this check a bot
+     simply posts here instead and the whole Turnstile chain is decorative.
+     ⚠ Restored immediately — the checks around this one share the process. */
+  const { CONFIG } = await import("../src/config.js");
+  const secret = `forward-${randomBytes(8).toString("hex")}`;
+  CONFIG.cmsForwardSecret = secret;
+
+  try {
+    const direct = await call("POST", "/api/subscribe", {
+      body: { email: "bot@example.com" },
+    });
+    assert.equal(direct.status, 403, "a direct post walked past Turnstile");
+
+    const wrong = await fetch(`${base}/api/subscribe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forward-secret": "guess" },
+      body: JSON.stringify({ email: "bot2@example.com" }),
+    });
+    assert.equal(wrong.status, 403, "a wrong secret was accepted");
+
+    /* Registration is guarded too — it is the other public write. */
+    const event = await fetch(`${base}/api/events/fishing-day/register?country=ca`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answers: REG({ email: "bot3@example.com" }) }),
+    });
+    assert.equal(event.status, 403);
+
+    /* And the Worker's own forward goes through. */
+    const forwarded = await fetch(`${base}/api/subscribe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forward-secret": secret },
+      body: JSON.stringify({ email: "through-the-worker@example.com" }),
+    });
+    assert.equal(forwarded.status, 201, "the Worker's own submission was refused");
+  } finally {
+    CONFIG.cmsForwardSecret = "";
+  }
+});
+
+await check("⚠ unset means OFF, and every form still works", async () => {
+  /* A deployment that has not been given the secret must keep taking forms —
+     the failure mode of a missing variable cannot be a site whose forms all
+     break. That is the state every other check in this file runs in. */
+  const { status } = await call("POST", "/api/subscribe", {
+    body: { email: "no-secret-set@example.com" },
+  });
+  assert.equal(status, 201);
+});
+
+await check("the unsubscribe link is NOT behind the forward secret", async () => {
+  /* ⚠ It is a link in somebody's inbox, not a form posted through the Worker.
+     Guarding it would break every unsubscribe in every email already sent. */
+  const { CONFIG } = await import("../src/config.js");
+  CONFIG.cmsForwardSecret = "something";
+  try {
+    const { signUnsubscribe } = await import("../src/lib/tokens.js");
+    const res = await fetch(
+      `${base}/api/unsubscribe?t=${encodeURIComponent(signUnsubscribe("quiet@example.com"))}`
+    );
+    assert.equal(res.status, 200);
+  } finally {
+    CONFIG.cmsForwardSecret = "";
+  }
+});
+
+console.log("\nthe welcome email");
+
+/* ⚠ Mail is OFF in this run, so what is proved here is the LOGIC around the
+   send — sent once ever, never to someone who did not ask, and a failure that
+   does not consume the one chance. The message itself is rendered directly. */
+
+await check("⚠ background work is AWAITED on Vercel and nowhere else", async () => {
+  /* THE FIX FOR THE BUG THAT STARTED THIS: a Vercel function is frozen the
+     moment it answers, so a promise nobody waits on is abandoned — the sign-up
+     is stored and the email is never sent. Off Vercel, waiting would only make
+     every form slower. */
+  const here = await import("../src/lib/background.js");
+  let ran = false;
+  await here.background(
+    "test",
+    () =>
+      new Promise((done) =>
+        setTimeout(() => {
+          ran = true;
+          done();
+        }, 60)
+      )
+  );
+  assert.equal(ran, false, "off Vercel it waited, which costs every form");
+
+  process.env.VERCEL = "1";
+  /* ⚠ A fresh specifier, because the flag is read once when the module loads —
+     which is also why this cannot be tested by setting the variable alone. */
+  const onVercel = await import("../src/lib/background.js?on-vercel");
+  delete process.env.VERCEL;
+
+  let ranThere = false;
+  await onVercel.background(
+    "test",
+    () =>
+      new Promise((done) =>
+        setTimeout(() => {
+          ranThere = true;
+          done();
+        }, 60)
+      )
+  );
+  assert.equal(ranThere, true, "⚠ on Vercel the work was abandoned — the bug is back");
+});
+
+await check("subscribing says whether you were already in", async () => {
+  const first = await call("POST", "/api/subscribe", {
+    body: { email: "welcome-me@example.com" },
+  });
+  assert.equal(first.status, 201);
+  /* Nobody has been greeted yet, so this is a new subscription. */
+  assert.equal(first.body.alreadySubscribed, false);
+
+  /* ⚠ A DIFFERENT address, written straight to the collection, and not the one
+     just posted. Mail is off here, so that first subscribe's welcome claims the
+     stamp, fails to send and hands it BACK — asynchronously, and off Vercel
+     nothing waits for it. Stamping the same row by hand would race that release
+     and lose. This row has no such work in flight. */
+  const { Audience } = await import("../src/models/Audience.js");
+  await Audience.create({
+    email: "already-in@example.com",
+    subscribed: true,
+    sources: ["subscribe"],
+    country: "in",
+    welcomeSentAt: new Date(),
+  });
+
+  const again = await call("POST", "/api/subscribe", {
+    body: { email: "already-in@example.com" },
+  });
+  assert.equal(again.status, 201);
+  assert.equal(again.body.alreadySubscribed, true, "a repeat subscribe looked new");
+});
+
+await check("⚠ the welcome is sent ONCE, ever", async () => {
+  const { welcomeSubscriber } = await import("../src/lib/welcome.js");
+  const { Audience } = await import("../src/models/Audience.js");
+
+  const person = await Audience.findOne({ email: "already-in@example.com" }).lean();
+  assert.ok(person.welcomeSentAt, "the fixture above should have stamped this");
+
+  const result = await welcomeSubscriber(person);
+  assert.deepEqual(result, { sent: false, reason: "already-sent" });
+});
+
+await check("⚠ a FAILED send gives the one chance back", async () => {
+  /* Mail is off, so every send here fails. If the stamp survived that, one
+     Resend outage would mean that person is never greeted at all. */
+  const { welcomeSubscriber } = await import("../src/lib/welcome.js");
+  const { Audience } = await import("../src/models/Audience.js");
+
+  /* ⚠ Written straight to the collection, NOT posted: the route runs its own
+     welcome in the background and off Vercel nothing waits for it, so posting
+     would race that attempt's claim and read "already-sent" at random. */
+  const person = await Audience.create({
+    email: "outage@example.com",
+    subscribed: true,
+    sources: ["subscribe"],
+    country: "in",
+  });
+
+  const result = await welcomeSubscriber(person);
+  assert.equal(result.sent, false);
+  assert.equal(result.reason, "mail-disabled");
+
+  const after = await Audience.findOne({ email: "outage@example.com" }).lean();
+  assert.equal(after.welcomeSentAt, null, "a failed send consumed the only attempt");
+});
+
+await check("⚠ nobody is greeted who did not ask", async () => {
+  const { welcomeSubscriber } = await import("../src/lib/welcome.js");
+  const { Audience } = await import("../src/models/Audience.js");
+
+  /* Registered for an event with the box untouched. */
+  await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: { answers: REG({ email: "no-thanks@example.com" }) },
+  });
+  const person = await Audience.findOne({ email: "no-thanks@example.com" }).lean();
+  assert.equal(person.subscribed, false);
+
+  assert.deepEqual(await welcomeSubscriber(person), {
+    sent: false,
+    reason: "not-subscribed",
+  });
+  assert.deepEqual(await welcomeSubscriber(null), { sent: false, reason: "no-address" });
+});
+
+await check("ticking the box on a REGISTRATION subscribes them too", async () => {
+  /* ⚠ The same act as the footer form, so it earns the same welcome — which is
+     a separate message from the booking confirmation. */
+  const { Audience } = await import("../src/models/Audience.js");
+  await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: { answers: REG({ email: "reg-and-sub@example.com" }), subscribe: true },
+  });
+
+  const person = await Audience.findOne({ email: "reg-and-sub@example.com" }).lean();
+  assert.equal(person.subscribed, true);
+  assert.ok(person.sources.includes("event"));
+});
+
+await check("the welcome message carries its unsubscribe link", async () => {
+  const { renderSubscribeWelcome } = await import("../src/lib/emails/subscribe.js");
+  const { subject, html, text } = renderSubscribeWelcome({
+    name: "Aisha",
+    unsubscribeUrl: "https://api.example.com/api/unsubscribe?t=abc",
+    siteUrl: "https://iwan.community",
+  });
+  assert.match(subject, /subscribed/i);
+  assert.match(html, /You're on the list/);
+  assert.match(html, /api\/unsubscribe\?t=abc/);
+  /* ⚠ In the text alternative too — this one is marketing, and a marketing
+     message with no way off the list is what gets a domain blocked. */
+  assert.match(text, /Unsubscribe: https:/);
+  assert.ok(!html.includes("<script"), "the welcome pulled in a script");
+});
+
+await check("⚠ the welcome is REFUSED without an unsubscribe link", async () => {
+  /* API_URL is unset in this run, so there is no link to build. Mail is off
+     too, and that guard comes first — what is asserted is that it does not
+     send, whichever guard stops it. */
+  const { sendSubscribeWelcome } = await import("../src/lib/mail.js");
+  const result = await sendSubscribeWelcome({ email: "someone@example.com" });
+  assert.equal(result.sent, false);
+});
+
+await check("templates fall back to the code when Resend has none", async () => {
+  /* ⚠ No key in this run, so there is no account to ask — and the answer must
+     be "use the built-in message", not an error. That is the path every
+     deployment without templates takes on every single send. */
+  const { resolveTemplate } = await import("../src/lib/templates.js");
+  assert.equal(await resolveTemplate("registration"), null);
+  assert.equal(await resolveTemplate("welcome"), null);
+  /* An unknown kind has no alias to look up, and is not a crash. */
+  assert.equal(await resolveTemplate("nonsense"), null);
+});
+
+await check("template variables are coerced to what Resend accepts", async () => {
+  /* ⚠ Strings and numbers only. Anything else is silently useless in a
+     template, so nothing else may leave here. */
+  const { variables } = await import("../src/lib/templates.js");
+  assert.deepEqual(
+    variables({ name: "Aisha", spots: 12, missing: undefined, none: null, yes: true }),
+    { name: "Aisha", spots: 12, missing: "", none: "", yes: "true" }
+  );
+});
+
 console.log("\nthe unsubscribe link");
 
 /* ⚠ Resend hosts this flow for BROADCASTS and does none of it for the
@@ -3128,21 +3384,74 @@ await check("⚠ the footer link is for SUBSCRIBERS only", async () => {
   assert.equal(await isSubscribed(""), false);
 });
 
-await check("the template renders the footer only when it is given a link", async () => {
+await check("the fallback shows its unsubscribe only to subscribers", async () => {
+  /* ⚠ The DESIGNED template lives in Resend; this is what goes out when
+       there is none. The gating is the part that is wrong to get wrong
+       either way: registering is not subscribing. */
   const { renderRegistrationConfirmation } =
     await import("../src/lib/emails/registration.js");
+
   const shown = renderRegistrationConfirmation({
-    eventTitle: "Fishing Day",
+    name: "Aisha Rahman",
+    event: {
+      title: "Fishing Day",
+      date: "2026-08-21",
+      start: "18:30",
+      venue: "Iwan Hall",
+    },
+    subscribed: true,
     unsubscribeUrl: "https://api.example.com/api/unsubscribe?t=abc",
   });
   assert.match(shown.html, /Unsubscribe from our newsletter/);
-  /* ⚠ And says what it does NOT do, in both alternatives. */
-  assert.match(shown.html, /does not cancel your place/);
+  assert.match(shown.html, /api\/unsubscribe\?t=abc/);
   assert.match(shown.text, /Unsubscribe from our newsletter: https:/);
+  /* ⚠ FIRST name only — the designed template greets with it, so the same
+       value must go under the same name whichever renders. */
+  assert.match(shown.html, /Hi Aisha,/);
+  assert.ok(!shown.html.includes("Rahman"), "the greeting used the full name");
 
-  const hidden = renderRegistrationConfirmation({ eventTitle: "Fishing Day" });
-  assert.ok(!hidden.html.includes("Unsubscribe"));
+  const hidden = renderRegistrationConfirmation({
+    name: "Aisha",
+    event: { title: "Fishing Day" },
+    subscribed: false,
+    unsubscribeUrl: "https://api.example.com/api/unsubscribe?t=abc",
+  });
+  assert.ok(
+    !hidden.html.includes("Unsubscribe from our newsletter"),
+    "offered to someone who never subscribed"
+  );
+  assert.ok(!hidden.html.includes("api/unsubscribe"), "the link survived the block");
   assert.ok(!hidden.text.includes("Unsubscribe"));
+});
+
+await check("the confirmation carries the EVENT's own image", async () => {
+  /* ⚠ The designed template's photograph is the event the person registered
+     for. An event with none falls back to the shipped hero — an empty value
+     renders as a broken image, and Resend refuses a send when a declared
+     variable has neither value nor fallback. */
+  const { registrationValues, DEFAULT_EVENT_IMAGE } =
+    await import("../src/lib/emails/registration.js");
+
+  const own = registrationValues({
+    event: { title: "Fishing Day", img: "https://cdn.iwan.community/fishing.webp" },
+  });
+  assert.equal(own.EVENT_IMAGE, "https://cdn.iwan.community/fishing.webp");
+
+  const none = registrationValues({ event: { title: "Fishing Day" } });
+  assert.equal(none.EVENT_IMAGE, DEFAULT_EVENT_IMAGE);
+  assert.ok(none.EVENT_IMAGE, "an empty image would render as a broken one");
+});
+
+await check("directions match what the site itself would link to", async () => {
+  const { directionsUrl } = await import("../src/lib/emails/registration.js");
+  /* ⚠ Coordinates win, exactly as in the site's lib/map.js — the email and the
+     page must pin the same place. */
+  assert.match(
+    directionsUrl({ coords: [12.97, 77.59], venue: "Iwan Hall" }),
+    /12\.97%2C77\.59/
+  );
+  assert.match(directionsUrl({ venue: "Iwan Hall" }), /Iwan\+Hall|Iwan%20Hall/);
+  assert.equal(directionsUrl({}), "");
 });
 
 await check("no link and no headers when API_URL is unset", async () => {
@@ -3153,8 +3462,12 @@ await check("no link and no headers when API_URL is unset", async () => {
 
   const { renderRegistrationConfirmation } =
     await import("../src/lib/emails/registration.js");
-  const { html, text } = renderRegistrationConfirmation({ eventTitle: "Fishing Day" });
-  assert.ok(!html.includes("Unsubscribe"), "a dead unsubscribe link was rendered");
+  const { html, text } = renderRegistrationConfirmation({
+    event: { title: "Fishing Day" },
+    subscribed: true,
+    unsubscribeUrl: "",
+  });
+  assert.ok(!html.includes("Unsubscribe"), "a dead unsubscribe link");
   assert.ok(!text.includes("Unsubscribe"));
 });
 

@@ -98,11 +98,13 @@ export async function recordAudience({
      read rather than the `subscribe` argument, so a returning subscriber who
      leaves the box untouched still refreshes their properties.
 
-     ⚠ Not awaited — see contacts.js. The subscription is stored; whether the
-     mirror lands is a separate question, and a Resend outage must not slow
-     down or fail a form that has already done its job. */
+     ⚠ AWAITED, and recordAudience itself is called before every response —
+     see lib/contacts.js and lib/background.js. Off Vercel this returns at once
+     and the push finishes on its own; on Vercel nothing survives the response,
+     which is precisely how a subscriber ended up stored here and absent from
+     Resend. It still cannot fail the form: syncContact never throws. */
   if (person?.subscribed) {
-    mirrorContact({
+    await mirrorContact({
       email: address,
       name: person.name,
       subscribed: true,

@@ -1,8 +1,15 @@
 import { CONFIG } from "../config.js";
 import { resend } from "./resendClient.js";
-import { renderRegistrationConfirmation } from "./emails/registration.js";
+import {
+  firstNameOf,
+  registrationValues,
+  renderRegistrationConfirmation,
+} from "./emails/registration.js";
 import { renderNotification } from "./emails/notification.js";
+import { renderSubscribeWelcome } from "./emails/subscribe.js";
 import { unsubscribeUrl } from "./tokens.js";
+import { background } from "./background.js";
+import { resolveTemplate, variables } from "./templates.js";
 import { isSubscribed } from "./audience.js";
 
 /* Transactional mail: the TRANSPORT only — markup lives in emails/.
@@ -49,28 +56,75 @@ export async function sendRegistrationConfirmation({ registration, event }) {
      pointing at localhost, is worse than not offering one. */
   const unsubscribe = unsubscribeUrl(registration.email);
 
-  /* ⚠ THE VISIBLE LINK IS FOR SUBSCRIBERS ONLY. This confirmation goes to
-     everyone who registers, and most of them never ticked the newsletter box —
-     offering to unsubscribe them from something they never joined invites the
-     reply "I never signed up for this", which is the opposite of reassuring.
+  /* ⚠ THE LINK ITSELF IS ALWAYS REAL AND ALWAYS SENT. A Resend Template has no
+     conditionals, so its unsubscribe block is shown to everybody; handing it an
+     empty value would leave a button pointing at nothing, which is worse than
+     showing it to somebody who never subscribed. The link is right for either —
+     it takes a subscriber off the list, and does nothing for a person who was
+     never on it.
 
-     ⚠ THE HEADER STAYS ON EVERY MESSAGE regardless. It costs the reader
-     nothing, mailbox providers read its presence as a sender behaving properly,
-     and pressing Gmail's button on a message they never subscribed to still
-     does the right thing. Only the FOOTER is conditional. */
+     ⚠ `showLink` decides only whether the BUILT-IN message PRINTS the line. It
+     renders in this process, so it can know the answer; a template on Resend's
+     side cannot. The List-Unsubscribe header is on every message regardless. */
   const showLink = Boolean(unsubscribe) && (await isSubscribed(registration.email));
 
-  const { subject, html, text } = renderRegistrationConfirmation({
-    unsubscribeUrl: showLink ? unsubscribe : "",
+  /* ⚠ Canada's routes are country-prefixed and India's are not — `/ca/events`
+     against `/events`. The site's router does that with a basename; the email
+     has to build it by hand, and a Canadian registrant sent to India's event
+     page is the mistake this prevents. */
+  const country = registration.country === "ca" ? "ca" : "in";
+  const eventUrl =
+    CONFIG.siteUrl && event?.slug
+      ? `${CONFIG.siteUrl.replace(/\/$/, "")}${country === "ca" ? "/ca" : ""}/events/${event.slug}`
+      : "";
+
+  const content = {
     name: registration.name,
-    eventTitle: event?.title ?? registration.eventTitle ?? "",
-    when: formatWhen(event),
-    where: [event?.venue, event?.address].filter(Boolean).join(", "),
-    eventUrl:
-      CONFIG.siteUrl && event?.slug
-        ? `${CONFIG.siteUrl.replace(/\/$/, "")}/events/${event.slug}`
-        : "",
+    event: event ?? {},
+    eventTitle: registration.eventTitle ?? "",
+    eventUrl,
+    /* ⚠ The real link, whoever this is — see above. `subscribed` below is what
+       decides whether the built-in message prints it. */
+    unsubscribeUrl: unsubscribe,
+  };
+
+  const { subject, html, text } = renderRegistrationConfirmation({
+    ...content,
+    subscribed: showLink,
   });
+
+  /* ⚠ A published template in Resend REPLACES the message rendered above; the
+     render still happens because its `subject` is the fallback when the
+     template has none, and because the template may not exist. See
+     lib/templates.js — a missing or draft template means the code is used, and
+     a lookup that fails means the same. */
+  const template = await resolveTemplate("registration", { country });
+
+  const body = template
+    ? {
+        template: {
+          id: template.id,
+          /* ⚠ THE SAME VALUES THE BUILT-IN FILE GETS, lower-cased. One
+             definition in emails/registration.js, so the Resend template and
+             the file cannot drift apart.
+             ⚠ LOWER-CASE BECAUSE RESEND RESERVES the upper-case FIRST_NAME,
+             LAST_NAME, EMAIL and UNSUBSCRIBE_URL for its own substitution and
+             refuses them as custom names — which is exactly why the token names
+             in the HTML file cannot be reused here verbatim. */
+          variables: variables(
+            Object.fromEntries(
+              Object.entries(registrationValues(content)).map(([key, value]) => [
+                key.toLowerCase(),
+                value,
+              ])
+            )
+          ),
+        },
+        /* ⚠ Only when the template has none of its own — passing one always
+           would override what was written in Resend. */
+        ...(template.subject ? {} : { subject }),
+      }
+    : { subject, html, text };
 
   /* ⚠ The SDK REPORTS errors in the result rather than throwing, so try/catch
      alone would read a rejected send as a success. The catch covers the
@@ -79,9 +133,7 @@ export async function sendRegistrationConfirmation({ registration, event }) {
     const { data, error } = await resend.emails.send({
       from: CONFIG.mailFrom,
       to: [registration.email],
-      subject,
-      text,
-      html,
+      ...body,
       ...(CONFIG.mailReplyTo ? { replyTo: CONFIG.mailReplyTo } : {}),
 
       /* ⚠ THE HEADERS ARE THE HALF THAT MATTERS. Gmail and Apple Mail show
@@ -154,13 +206,98 @@ export async function sendNotification({ replyTo, ...content }) {
   }
 }
 
-/* ⚠ Fire-and-forget, with the rejection swallowed. sendNotification already
-   never throws, so this is belt and braces against a future edit that makes
-   it — an unhandled rejection takes the process down on Node. */
-export const notify = (content) => {
-  void sendNotification(content).catch((err) =>
-    console.error("Notification threw past its own guard:", err)
-  );
-};
+/**
+ * The "you're on the list" email, sent once when somebody subscribes.
+ *
+ * ⚠ NEVER THROWS, same contract as the confirmation.
+ *
+ * ⚠ REFUSED WITHOUT AN UNSUBSCRIBE LINK. This is the one message here that is
+ * marketing rather than transactional, and a marketing email with no way off
+ * the list is the thing that gets a sending domain blocked. With API_URL unset
+ * there is no link to build, so nothing is sent — loudly, in the return value,
+ * rather than quietly sending something that should not exist.
+ *
+ * @returns {Promise<{sent: boolean, reason?: string, id?: string}>}
+ */
+export async function sendSubscribeWelcome({ email, name = "", country = "" }) {
+  if (!MAIL_ENABLED) return { sent: false, reason: "mail-disabled" };
+  if (!email) return { sent: false, reason: "no-address" };
+
+  const unsubscribe = unsubscribeUrl(email);
+  if (!unsubscribe) return { sent: false, reason: "no-unsubscribe-url" };
+
+  /* ⚠ Canada's routes are country-prefixed and India's are not, the same trap
+     the confirmation documents. The designed template links to the right root
+     itself, but the CTA button is built from this. */
+  const siteUrl =
+    CONFIG.siteUrl && country === "ca"
+      ? `${CONFIG.siteUrl.replace(/\/$/, "")}/ca`
+      : CONFIG.siteUrl;
+
+  const { subject, html, text } = renderSubscribeWelcome({
+    name: firstNameOf(name),
+    unsubscribeUrl: unsubscribe,
+    siteUrl,
+  });
+
+  /* Same rule as the confirmation: Resend's template wins where there is a
+     published one, the built-in message is the fallback. */
+  const template = await resolveTemplate("welcome", { country });
+
+  const body = template
+    ? {
+        template: {
+          id: template.id,
+          /* ⚠ EXACTLY the three the designed template declares — see the site
+             repo's emails/subscribe-{in,ca}.html. A variable it declares and
+             this does not send makes Resend REFUSE the send outright, so the
+             two lists are a contract, not a convenience. */
+          variables: variables({
+            /* ⚠ First name only, as the greeting expects: "Assalamu alaikum
+               Aisha". The same rule the confirmation uses. */
+            first_name: firstNameOf(name),
+            site_url: siteUrl,
+            /* ⚠ OUR signed link. Resend fills its own UNSUBSCRIBE_URL for
+               Broadcasts only; on a transactional send it fills nothing, so the
+               link has to come from here or the button is dead. */
+            unsubscribe_url: unsubscribe,
+          }),
+        },
+        ...(template.subject ? {} : { subject }),
+      }
+    : { subject, html, text };
+
+  try {
+    const { data, error } = await resend.emails.send({
+      from: CONFIG.mailFrom,
+      to: [email],
+      ...body,
+      ...(CONFIG.mailReplyTo ? { replyTo: CONFIG.mailReplyTo } : {}),
+      headers: {
+        "List-Unsubscribe": `<${unsubscribe}>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      },
+    });
+
+    if (error) {
+      console.error("Welcome email failed:", error);
+      return { sent: false, reason: error.message ?? "send-failed" };
+    }
+    return { sent: true, id: data?.id };
+  } catch (err) {
+    console.error("Welcome email threw:", err);
+    return { sent: false, reason: err?.message ?? "send-threw" };
+  }
+}
+
+/* ⚠ MUST BE AWAITED, and before the response — see lib/background.js. Off
+   Vercel this returns immediately and the send finishes behind the response,
+   exactly as it always did; on Vercel awaiting it is the only thing that keeps
+   the function alive long enough for the send to happen at all.
+
+   The rejection is still swallowed in there: sendNotification never throws, and
+   this is belt and braces against a future edit that makes it. */
+export const notify = (content) =>
+  background("notification", () => sendNotification(content));
 
 export default sendRegistrationConfirmation;
