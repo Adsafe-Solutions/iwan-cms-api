@@ -12,6 +12,7 @@ import authRoutes from "./routes/auth.js";
 import webhookRoutes from "./routes/webhooks.js";
 import unsubscribeRoutes from "./routes/unsubscribe.js";
 import { errorHandler, notFoundHandler } from "./middleware/error.js";
+import { requireForwarded } from "./middleware/forwarded.js";
 
 export function createApp() {
   const app = express();
@@ -93,13 +94,12 @@ export function createApp() {
   app.use("/api", unsubscribeRoutes);
 
   app.use("/api/auth", authRoutes);
-  /* ⚠ The only route the public can WRITE to, mounted first so its own rate
-     limit applies to it and nothing else. */
-  app.use("/api", registerRoutes);
-  /* The other public writes — subscribe, contact, volunteer, career. Mounted
-     beside register for the same reason: their own rate limits apply here and
-     nowhere else. */
-  app.use("/api", formRoutes);
+  /* ⚠ The only routes the public can WRITE to, mounted first so their own rate
+     limits apply to them and nothing else — and both behind `requireForwarded`,
+     which is what stops a bot skipping Turnstile by posting straight at this
+     API instead of through the site's Cloudflare Worker. */
+  app.use("/api", requireForwarded, registerRoutes);
+  app.use("/api", requireForwarded, formRoutes);
   app.use("/api/admin", adminRoutes);
   /* Last: its routes are the broadest and would swallow a future /api/admin-
      like path mounted after it. */

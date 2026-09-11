@@ -61,6 +61,29 @@ const audienceSchema = new mongoose.Schema(
     /* An organiser's private note, same convention as a registration. */
     note: { type: String, trim: true, default: "" },
 
+    /* ⚠ ONE WELCOME PER SUBSCRIPTION, not per person. Ticking the box on a
+       second form while already subscribed sends nothing — they are already in
+       — but somebody who unsubscribes and later comes back is making a NEW
+       opt-in, and the welcome is the only confirmation that it took. So every
+       write that sets `subscribed: false` clears this too.
+
+       ⚠ It is CLAIMED before the send, not stamped after: two submissions
+       landing together would otherwise both read "not sent yet" and both send.
+       A send that then fails clears it again, so the next attempt can try.
+       Null means never sent, which is also true of every row predating this. */
+    welcomeSentAt: { type: Date, default: null },
+
+    /* ⚠ WHICH COUNTRIES HAVE BEEN WELCOMED. India and Canada are different
+       lists — different events, different links, different social accounts —
+       so subscribing on the Canadian site having already subscribed on the
+       Indian one is a SECOND opt-in, and earns Canada's own welcome.
+
+       ⚠ This, not `welcomeSentAt`, is what decides whether to send. The stamp
+       above is kept as "when we last greeted them", which is what an editor
+       looking at the row actually wants to know. Cleared together, by every
+       write that unsubscribes somebody. */
+    welcomedCountries: { type: [{ type: String, enum: COUNTRY_CODES }], default: [] },
+
     lastSeenAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

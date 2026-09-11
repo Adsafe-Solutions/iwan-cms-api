@@ -127,12 +127,19 @@ router.patch(
   "/:id",
   validate(audienceUpdate, { partial: true }),
   wrap(async (req, res) => {
-    const row = await Audience.findByIdAndUpdate(req.params.id, req.body, {
+    /* ⚠ Unticking the box here clears the welcome stamp too, exactly as an
+       unsubscribe from an email does — so somebody an editor removes, who later
+       subscribes again, is greeted properly. See the model. */
+    const patch =
+      req.body.subscribed === false
+        ? { ...req.body, welcomeSentAt: null, welcomedCountries: [] }
+        : req.body;
+
+    const row = await Audience.findByIdAndUpdate(req.params.id, patch, {
       new: true,
       runValidators: true,
     }).lean();
     if (!row) throw notFound("No such person");
-    res.json(adminAudience(row));
 
     /* ⚠ Only when `subscribed` was actually in the request. A note or a
        corrected mobile is Iwan's own record and no business of Resend's, and
@@ -142,10 +149,11 @@ router.patch(
        ⚠ Unticking the box sends `unsubscribed: true` rather than deleting the
        contact: an unsubscribed contact is a record that they said no, and a
        deleted one is nothing at all — the next import would happily mail them
-       again. Deleting the PERSON is the delete below. Not awaited, like every
-       other call to a third party here. */
+       again. Deleting the PERSON is the delete below. Awaited and before the
+       response, like every other call to a third party here — see
+       lib/background.js. */
     if (typeof req.body.subscribed === "boolean") {
-      mirrorContact({
+      await mirrorContact({
         email: row.email,
         name: row.name,
         subscribed: row.subscribed,
@@ -154,6 +162,8 @@ router.patch(
         subscribedAt: row.createdAt,
       });
     }
+
+    res.json(adminAudience(row));
   })
 );
 
@@ -162,14 +172,15 @@ router.delete(
   wrap(async (req, res) => {
     const row = await Audience.findByIdAndDelete(req.params.id);
     if (!row) throw notFound("No such person");
-    res.status(204).end();
 
     /* ⚠ Deleting the person here means deleting them THERE too — a row removed
        from the audience that carried on receiving broadcasts would be the worst
        of both lists. This is the one place a contact is removed rather than
        marked unsubscribed, because it is the one place someone has said the
        record itself should not exist. */
-    forgetContact(row.email);
+    await forgetContact(row.email);
+
+    res.status(204).end();
   })
 );
 

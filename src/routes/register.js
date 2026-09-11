@@ -7,6 +7,8 @@ import { COUNTRY_CODES, countryQuery, isCountryCode } from "../lib/countries.js"
 import { buildAnswers, summarise } from "../validators/registration.js";
 import { notify, sendRegistrationConfirmation } from "../lib/mail.js";
 import { recordAudience } from "../lib/audience.js";
+import { welcome } from "../lib/welcome.js";
+import { background } from "../lib/background.js";
 import { CONFIG } from "../config.js";
 
 /* The one route the public can WRITE to, and therefore the whole attack surface
@@ -118,7 +120,7 @@ router.post(
        notices until a mailout goes out short. `subscribe` comes off the form
        when it asks; an event that does not ask still adds the person, just not
        to the newsletter. */
-    await recordAudience({
+    const person = await recordAudience({
       email,
       name,
       mobile: summarised.mobile,
@@ -132,19 +134,16 @@ router.post(
       country,
     });
 
-    /* ⚠ Deliberately thin — this response is public, so the less it says about
-       what is stored, the better. */
-    res.status(201).json({
-      ok: true,
-      id: String(registration._id),
-      event: { slug: event.slug, title: event.title },
-    });
+    /* ⚠ THE NEWSLETTER BOX ON THIS FORM IS A SUBSCRIPTION LIKE ANY OTHER, and
+       gets the same welcome the footer form sends — a separate message from
+       the booking confirmation below, because they say different things and
+       one of them is marketing. `welcome` does nothing if the box was not
+       ticked, or if this person has been greeted before. */
+    await welcome(person, country);
 
-    /* ⚠ Iwan's own heads-up, beside the registrant's confirmation and after
-       the response for the same reason: the place is booked either way. The
-       ANSWERS are included so the inbox is enough to act on without opening
-       the CMS. */
-    notify({
+    /* ⚠ Iwan's own heads-up, beside the registrant's confirmation. The ANSWERS
+       are included so the inbox is enough to act on without opening the CMS. */
+    await notify({
       subject: `New registration: ${event.title}`,
       heading: "Someone registered for an event",
       intro: `${name || "Someone"} signed up for ${event.title}.`,
@@ -171,29 +170,39 @@ router.post(
       replyTo: email || undefined,
     });
 
-    /* ⚠ AFTER the response and not awaited. Making the 201 depend on a mail
-       API would turn an outage into an error the person retries, putting a
-       second copy of them in the database. sendRegistrationConfirmation never
-       throws, so this cannot reject into `wrap` and respond twice.
+    /* ⚠ BEFORE THE RESPONSE NOW, AND AWAITED — see lib/background.js. It used
+       to run after, unawaited, which is correct on an always-on server and
+       silently does nothing on Vercel: the function freezes when the response
+       is sent, so the confirmation was never actually sent from there.
+
+       ⚠ The 201 still cannot fail because of this. sendRegistrationConfirmation
+       never throws and `background` swallows what it cannot handle, so an
+       outage delays the response slightly rather than turning a booked place
+       into an error the person retries — which would put a second copy of them
+       in the database.
 
        The stamp is what lets the CMS say whether this person was ever written
        to. ⚠ `updateOne` rather than saving the document — re-saving the copy
-       captured in this closure would write back a stale doc — and the `.catch`
-       stops a failed stamp becoming an unhandled rejection. */
-    void sendRegistrationConfirmation({ registration, event })
-      .then((result) => {
-        if (!result.sent) return null;
-        return Registration.updateOne(
-          { _id: registration._id },
-          {
-            $set: { confirmationSentAt: new Date() },
-            $inc: { confirmationSentCount: 1 },
-          }
-        );
-      })
-      .catch((err) => {
-        console.error("Could not record the confirmation send:", err);
-      });
+       captured in this closure would write back a stale doc. */
+    await background("registration confirmation", async () => {
+      const result = await sendRegistrationConfirmation({ registration, event });
+      if (!result.sent) return;
+      await Registration.updateOne(
+        { _id: registration._id },
+        {
+          $set: { confirmationSentAt: new Date() },
+          $inc: { confirmationSentCount: 1 },
+        }
+      );
+    });
+
+    /* ⚠ Deliberately thin — this response is public, so the less it says about
+       what is stored, the better. */
+    res.status(201).json({
+      ok: true,
+      id: String(registration._id),
+      event: { slug: event.slug, title: event.title },
+    });
   })
 );
 

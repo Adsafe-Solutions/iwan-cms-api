@@ -1,4 +1,13 @@
+import { dropSection, lower, render } from "./render.js";
 /* The confirmation someone gets after registering for an event.
+
+   ⚠ RESEND'S TEMPLATE WINS WHERE THERE IS ONE. The files in templates/ are
+   what gets uploaded there, and
+   lib/templates.js uses one whenever a published one exists. This renders only
+   when Resend has none, or cannot be reached: a plainer confirmation is worth
+   sending, and an account with no templates yet still works.
+
+  
 
    ⚠ THE ONE PLACE HEX COLOURS BELONG. An email has no Tailwind and no build
    step, so colours must be inline or clients drop them. The values are copied
@@ -8,35 +17,55 @@
    renders through Word's engine (no flexbox, no grid) and Gmail strips <head>
    styles when it clips a message. */
 
-const BRAND = {
-  primary: "#244967",
-  primaryDark: "#1b374e",
-  accent: "#f9be00",
-  ink: "#0a1020",
-  muted: "#5b6b80",
-  line: "#e4e8f0",
-  mist: "#f7f9fc",
-  white: "#ffffff",
+/* Matches the site's own `lib/map.js`, deliberately: the email and the page
+   must pin the same place. Coordinates win where an event has them, otherwise
+   the venue text, and the address is the last resort. */
+export const directionsUrl = (event = {}) => {
+  const query =
+    Array.isArray(event.coords) && event.coords.length === 2
+      ? event.coords.join(",")
+      : event.venue || event.address || "";
+  return query
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`
+    : "";
 };
 
-const FONT =
-  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'DM Sans', Roboto, Helvetica, Arial, sans-serif";
+/* ⚠ The photograph in the designed template is THE EVENT'S OWN, so a person
+   sees the thing they registered for rather than a stock crowd. An event
+   without one falls back to the hero the template shipped with — a template
+   variable that arrives empty renders as a broken image, and Resend refuses a
+   send outright when a declared variable has neither value nor fallback. */
+export const DEFAULT_EVENT_IMAGE = "https://cdn.iwan.community/iwan-youth-hero.webp";
 
-/* ⚠ Everything interpolated below comes from a public form. Without escaping,
-   someone registering as `<script>…` gets it rendered by the mail client. */
-export const escapeHtml = (value = "") =>
-  String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+/* ⚠ FIRST name only. The designed template greets with it — "Assalamu alaikum
+   Aisha" — and a full name there reads like a letter from a bank. */
+export const firstNameOf = (name = "") => String(name).trim().split(/\s+/)[0] ?? "";
 
-const detailRow = (label, value) => `
-              <tr>
-                <td style="padding:0 0 14px 0;font-family:${FONT};font-size:13px;line-height:18px;color:${BRAND.muted};font-weight:700;text-transform:uppercase;letter-spacing:0.08em;width:74px;vertical-align:top;">${escapeHtml(label)}</td>
-                <td style="padding:0 0 14px 0;font-family:${FONT};font-size:15px;line-height:22px;color:${BRAND.ink};font-weight:600;vertical-align:top;">${escapeHtml(value)}</td>
-              </tr>`;
+/**
+ * The values a confirmation is built from, in ONE place — this file renders
+ * them, and lib/mail.js sends the same set (lower-cased) to a Resend template.
+ * One definition, so the two cannot drift.
+ */
+export function registrationValues({
+  name = "",
+  event = {},
+  eventTitle = "",
+  eventUrl = "",
+  unsubscribeUrl = "",
+} = {}) {
+  return {
+    FIRST_NAME: firstNameOf(name),
+    EVENT_TITLE: event.title || eventTitle,
+    EVENT_DATE: event.date ?? "",
+    EVENT_START: event.start ?? "",
+    EVENT_END: event.end ?? "",
+    EVENT_VENUE: [event.venue, event.address].filter(Boolean).join(", "),
+    EVENT_URL: eventUrl,
+    EVENT_IMAGE: event.img || DEFAULT_EVENT_IMAGE,
+    DIRECTIONS_URL: directionsUrl(event),
+    UNSUBSCRIBE_URL: unsubscribeUrl,
+  };
+}
 
 /**
  * Renders the confirmation. Every field is optional except the event title; a
@@ -45,116 +74,66 @@ const detailRow = (label, value) => `
  * @returns {{subject: string, html: string, text: string}}
  */
 export function renderRegistrationConfirmation({
-  unsubscribeUrl = "",
+  /* The same shape the Resend template path builds — see registrationValues. */
   name = "",
+  event = {},
   eventTitle = "",
-  when = "",
-  where = "",
   eventUrl = "",
+  unsubscribeUrl = "",
+  /* ⚠ Picks the designed FILE — Canada's links are country-prefixed and its
+     address and social accounts are its own. An unknown country falls back to
+     India's rather than failing to send at all. */
+  country = "in",
+  /* ⚠ Gates the unsubscribe LINE IN THE TEXT ALTERNATIVE only. The designed
+     HTML shows its block to everybody, because Resend Templates have no
+     conditionals and the same file is rendered on both sides — what stops it
+     leading nowhere is an empty `unsubscribe_url`, which the renderer drops
+     the row for. */
+  subscribed = false,
   brandName = "Iwan Community",
 } = {}) {
-  const greeting = name ? `Hi ${name},` : "Hi,";
+  const values = registrationValues({
+    name,
+    event,
+    eventTitle,
+    eventUrl,
+    unsubscribeUrl,
+  });
+
+  eventTitle = values.EVENT_TITLE;
+  const when = [
+    values.EVENT_DATE,
+    [values.EVENT_START, values.EVENT_END].filter(Boolean).join("–"),
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const where = values.EVENT_VENUE;
+  eventUrl = values.EVENT_URL;
+  unsubscribeUrl = subscribed ? values.UNSUBSCRIBE_URL : "";
+
+  const greeting = values.FIRST_NAME ? `Hi ${values.FIRST_NAME},` : "Hi,";
   const subject = `You're registered: ${eventTitle}`;
 
   /* ⚠ The grey preview line beside the subject. Left unset, clients scrape the
      first text they find — here the brand name, which says nothing. */
   const preheader = `Your spot at ${eventTitle} is confirmed.`;
 
-  const rows = [when && detailRow("When", when), where && detailRow("Where", where)]
-    .filter(Boolean)
-    .join("");
+  /* ⚠ The designed file in templates/ — the SAME one uploaded to Resend, so
+     the fallback and the Template render identically. */
+  let html = render(`registration-${country === "ca" ? "ca" : "in"}.html`, lower(values));
 
-  /* ⚠ Outlook ignores padding on <a>, so the button needs a table cell. */
-  const button = eventUrl
-    ? `
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 0 0;">
-              <tr>
-                <td align="center" bgcolor="${BRAND.primary}" style="border-radius:6px;">
-                  <a href="${escapeHtml(eventUrl)}" target="_blank" style="display:inline-block;padding:13px 26px;font-family:${FONT};font-size:15px;font-weight:700;color:${BRAND.white};text-decoration:none;border-radius:6px;">Event details</a>
-                </td>
-              </tr>
-            </table>`
-    : "";
+  /* ⚠ No link means DROP THE ROW, not render an empty one — see dropSection.
+     With API_URL unset there is nothing to point at, and a button leading
+     nowhere is worse than no button. */
+  if (!values.UNSUBSCRIBE_URL) html = dropSection(html, "UNSUBSCRIBE");
 
-  const html = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="color-scheme" content="light" />
-<meta name="supported-color-schemes" content="light" />
-<title>${escapeHtml(subject)}</title>
-</head>
-<body style="margin:0;padding:0;background-color:${BRAND.mist};">
-<div style="display:none;font-size:1px;color:${BRAND.mist};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">${escapeHtml(preheader)}</div>
+  /* ⚠ Same rule as the unsubscribe row: no address to point at means DROP the
+     button, not render one that goes nowhere. */
+  if (!values.EVENT_URL) html = dropSection(html, "CTA");
 
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:${BRAND.mist};">
-  <tr>
-    <td align="center" style="padding:32px 16px;">
-
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:600px;max-width:100%;background-color:${BRAND.white};border-radius:8px;overflow:hidden;border:1px solid ${BRAND.line};">
-
-        <tr>
-          <td style="background-color:${BRAND.primary};padding:22px 32px;">
-            <span style="font-family:${FONT};font-size:15px;font-weight:800;color:${BRAND.white};letter-spacing:0.04em;">${escapeHtml(brandName)}</span>
-          </td>
-        </tr>
-
-        <tr>
-          <td style="height:4px;background-color:${BRAND.accent};font-size:0;line-height:0;">&nbsp;</td>
-        </tr>
-
-        <tr>
-          <td style="padding:34px 32px 8px 32px;">
-            <h1 style="margin:0 0 6px 0;font-family:${FONT};font-size:24px;line-height:31px;font-weight:800;color:${BRAND.ink};">You're registered</h1>
-            <p style="margin:0 0 20px 0;font-family:${FONT};font-size:16px;line-height:24px;color:${BRAND.muted};">${escapeHtml(greeting)}</p>
-            <p style="margin:0 0 22px 0;font-family:${FONT};font-size:16px;line-height:24px;color:${BRAND.ink};">Your spot at <strong style="color:${BRAND.ink};">${escapeHtml(eventTitle)}</strong> is confirmed. We look forward to seeing you.</p>
-          </td>
-        </tr>
-${
-  rows
-    ? `
-        <tr>
-          <td style="padding:0 32px;">
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:${BRAND.mist};border:1px solid ${BRAND.line};border-radius:6px;">
-              <tr><td style="padding:20px 22px 6px 22px;">
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-${rows}
-                </table>
-              </td></tr>
-            </table>
-          </td>
-        </tr>`
-    : ""
-}
-        <tr>
-          <td style="padding:22px 32px 34px 32px;">
-${button}
-            <p style="margin:22px 0 0 0;font-family:${FONT};font-size:14px;line-height:21px;color:${BRAND.muted};">Can no longer make it? Just reply to this email and let us know, so we can offer your spot to someone else.</p>
-          </td>
-        </tr>
-
-        <tr>
-          <td style="background-color:${BRAND.mist};border-top:1px solid ${BRAND.line};padding:18px 32px;">
-            <p style="margin:0;font-family:${FONT};font-size:12px;line-height:18px;color:${BRAND.muted};">You are receiving this because you registered for an event with ${escapeHtml(brandName)}.${
-              unsubscribeUrl
-                ? ` <a href="${escapeHtml(unsubscribeUrl)}" style="color:${BRAND.muted};text-decoration:underline;">Unsubscribe from our newsletter</a>.`
-                : ""
-            }</p>${
-              unsubscribeUrl
-                ? `
-            <p style="margin:8px 0 0 0;font-family:${FONT};font-size:12px;line-height:18px;color:${BRAND.muted};">Unsubscribing does not cancel your place at an event.</p>`
-                : ""
-            }
-          </td>
-        </tr>
-
-      </table>
-    </td>
-  </tr>
-</table>
-</body>
-</html>`;
+  /* ⚠ And the directions button, which has its own row and its own URL: an
+     event with no venue, address or coordinates has nowhere to send anybody. */
+  if (!values.DIRECTIONS_URL) html = dropSection(html, "DIRECTIONS");
 
   /* ⚠ Not optional: some clients render only text, and a message without a
      text/plain alternative scores worse with spam filters. */
@@ -169,7 +148,10 @@ ${button}
     "",
     "Can no longer make it? Just reply to this email and let us know, so we can offer your spot to someone else.",
     "",
-    `— ${brandName}`,
+    /* ⚠ "Team Iwan", not the brand name — it matches how the designed
+       templates sign off, and a person reads one immediately after the other.
+       `brandName` still names the organisation in the sentences ABOUT it. */
+    "— Team Iwan",
     /* ⚠ In the text alternative too, and spread rather than filtered: a client
        rendering text only would otherwise show a message with no way off the
        list at all. Blank lines are meaningful here, so the pair goes in

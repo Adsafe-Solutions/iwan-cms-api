@@ -5,11 +5,17 @@ import { Application } from "../models/Application.js";
 import { badRequest, wrap } from "../lib/errors.js";
 import { validate } from "../middleware/validate.js";
 import { recordAudience } from "../lib/audience.js";
-import { notify } from "../lib/mail.js";
+import {
+  notify,
+  sendApplicationConfirmation,
+  sendContactConfirmation,
+} from "../lib/mail.js";
 import { COUNTRY_CODES, isCountryCode } from "../lib/countries.js";
 import { buildAnswers, summarise } from "../validators/registration.js";
 import { contactInput, subscribeInput } from "../validators/forms.js";
 import { resolveApplyForm } from "../lib/applyForms.js";
+import { alreadySubscribed, welcome } from "../lib/welcome.js";
+import { background } from "../lib/background.js";
 
 /* The public forms: subscribe, contact, volunteer and career. Event sign-ups
    are next door in register.js.
@@ -55,27 +61,41 @@ router.post(
   validate(subscribeInput),
   wrap(async (req, res) => {
     const country = askedCountry(req);
-    await recordAudience({
+    const person = await recordAudience({
       ...req.body,
       subscribe: true,
       source: "subscribe",
       country,
     });
-    ok(res);
 
-    /* ⚠ After the response and never awaited, like every notification here —
-       the person is on the list whether or not the mail goes out. */
-    notify({
+    /* ⚠ Read BEFORE the welcome is sent, or it is always true by then. */
+    const already = alreadySubscribed(person, country);
+
+    /* ⚠ BOTH AWAITED, AND BEFORE THE RESPONSE — see lib/background.js. On
+       Vercel the function is frozen the moment the response goes out, so work
+       started after it is simply abandoned: the row is stored, the 201 is sent,
+       and no email is ever produced. On Render these return immediately and the
+       work carries on behind the response exactly as it used to. */
+    await welcome(person, country);
+
+    await notify({
       subject: "New newsletter subscriber",
       heading: "Someone subscribed to the newsletter",
       rows: [
         ["Email", req.body.email],
         ["Country", country.toUpperCase()],
+        ["Already subscribed", already],
       ],
       cmsUrl: CONFIG.cmsUrl ? `${CONFIG.cmsUrl}/audience?source=subscribe` : "",
       cmsLabel: "See the audience",
       replyTo: req.body.email,
     });
+
+    /* ⚠ The one form here that answers with more than `{ ok: true }`. The site
+       shows "you are already on the list" rather than a second "thank you for
+       subscribing", which is what somebody typing their address in twice is
+       actually asking about. */
+    res.status(201).json({ ok: true, alreadySubscribed: already });
   })
 );
 
@@ -87,19 +107,36 @@ router.post(
   wrap(async (req, res) => {
     const { subject, message, ...person } = req.body;
     const country = askedCountry(req);
-    await recordAudience({
+    const saved = await recordAudience({
       ...person,
       source: "contact",
       country,
       message: { subject, body: message },
     });
-    ok(res);
+
+    /* ⚠ The sender's own copy — until now they typed a message into a box and
+       got a line on screen, with no proof it went anywhere. Awaited and before
+       the response, like everything else that leaves this process. */
+    await background("contact confirmation", () =>
+      sendContactConfirmation({
+        email: person.email,
+        name: person.name,
+        subject,
+        message,
+        country,
+      })
+    );
+
+    /* ⚠ The contact form carries the same newsletter box as the footer, so it
+       is the same act and gets the same email. `welcome` decides — it does
+       nothing for someone who did not tick it, or has had it already. */
+    await welcome(saved, country);
 
     /* ⚠ The one form where the mail genuinely matters: a contact message is a
        question waiting on an answer, and until now it sat in the CMS with
        nobody told it had arrived. `replyTo` is the sender, so hitting reply
        in the inbox writes back to them. */
-    notify({
+    await notify({
       subject: `New message: ${subject}`,
       heading: "Someone sent a message",
       intro: `${person.name || "Someone"} used the contact form.`,
@@ -115,6 +152,8 @@ router.post(
       cmsLabel: "Open the contact inbox",
       replyTo: person.email,
     });
+
+    ok(res);
   })
 );
 
@@ -179,9 +218,18 @@ const application = (kind) => [
       answers,
     });
 
-    ok(res);
+    /* ⚠ The applicant's own acknowledgement, the same courtesy a registration
+       gets — until now they filled in a form and heard nothing at all. Awaited
+       and before the response, like everything else that leaves this process:
+       on Vercel nothing survives the response being sent. */
+    await background("application confirmation", () =>
+      sendApplicationConfirmation({ kind, email, name, role, country })
+    );
 
-    notify({
+    /* Same newsletter box, same email — see the contact form above. */
+    await welcome(person, country);
+
+    await notify({
       subject: `New ${kind} application: ${name || email}`,
       heading:
         kind === "career"
@@ -200,6 +248,8 @@ const application = (kind) => [
       cmsLabel: "Open the applications",
       replyTo: email,
     });
+
+    ok(res);
   }),
 ];
 

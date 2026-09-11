@@ -91,28 +91,41 @@ export async function recordAudience({
      would mirror the newsletter box and quietly miss the four other forms that
      can also tick it.
 
-     ⚠ Only people who are actually SUBSCRIBED are mirrored. Someone who sent a
-     message without ticking the box is in Iwan's audience and is not a
-     newsletter contact, and pushing them to Resend would put an address into a
-     mailing tool that never agreed to be mailed. The row's own `subscribed` is
-     read rather than the `subscribe` argument, so a returning subscriber who
-     leaves the box untouched still refreshes their properties.
+     ⚠ EVERYONE IS MIRRORED, SUBSCRIBED OR NOT, and `unsubscribed` on the Resend
+     contact says which. Somebody who registered for an event without ticking
+     the newsletter box belongs in the event segment — that is the list of who
+     came, not the list of who wants mail — and leaving them out made those
+     segments silently incomplete.
 
-     ⚠ Not awaited — see contacts.js. The subscription is stored; whether the
-     mirror lands is a separate question, and a Resend outage must not slow
-     down or fail a form that has already done its job. */
-  if (person?.subscribed) {
-    mirrorContact({
+     ⚠ WHAT PROTECTS THEM IS THE FLAG, not their absence. A contact marked
+     `unsubscribed` is skipped by every broadcast, so this is a suppression
+     record rather than a mailing list entry. The row's own `subscribed` is
+     read, never the `subscribe` argument, so an untouched box on a later form
+     cannot quietly opt anybody in.
+
+     ⚠ AWAITED, and recordAudience itself is called before every response —
+     see lib/contacts.js and lib/background.js. Off Vercel this returns at once
+     and the push finishes on its own; on Vercel nothing survives the response,
+     which is precisely how a subscriber ended up stored here and absent from
+     Resend. It still cannot fail the form: syncContact never throws. */
+  if (person) {
+    await mirrorContact({
       email: address,
       name: person.name,
-      subscribed: true,
+      subscribed: Boolean(person.subscribed),
       /* ⚠ Where they FIRST came from, not the form in front of us. `sources` is
          kept in first-seen order, and the property is paired with `joined`,
          which is the row's creation date — a returning subscriber whose source
          flipped to whichever form they last touched would make a segment built
          on it mean nothing. */
       source: person.sources?.[0] ?? source,
+      /* ⚠ All of them, for the per-source segments — see lib/segments.js. */
+      sources: person.sources ?? [source].filter(Boolean),
       country: person.country ?? country,
+      /* ⚠ Where they FIRST arrived and where they are acting NOW — see
+         lib/segments.js. The row keeps only the first, so without this a
+         returning person is never filed under the other country. */
+      countries: [person.country, country],
       subscribedAt: person.createdAt,
     });
   }
@@ -139,7 +152,6 @@ export async function isSubscribed(email) {
     const row = await Audience.findOne({ email: address }).select("subscribed").lean();
     return Boolean(row?.subscribed);
   } catch (err) {
-    console.error("Could not read the subscription state:", err);
     return false;
   }
 }

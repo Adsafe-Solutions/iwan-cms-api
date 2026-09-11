@@ -1,5 +1,7 @@
 import { CONFIG } from "../config.js";
 import { resend } from "./resendClient.js";
+import { background } from "./background.js";
+import { addToSegments, segmentsFor } from "./segments.js";
 
 /* The audience list, mirrored into Resend.
 
@@ -74,12 +76,6 @@ async function ensureProperties() {
           throw new Error(created.error.message ?? `could not create ${property.key}`);
         }
       }
-
-      if (missing.length) {
-        console.log(
-          `[resend] created contact properties: ${missing.map((p) => p.key).join(", ")}`
-        );
-      }
     })().catch((err) => {
       ensured = null;
       throw err;
@@ -134,7 +130,17 @@ export async function syncContact({
   name = "",
   subscribed = true,
   source = "",
+  /* ⚠ EVERY form this person has come through, not just the one in front of
+     us — a segment per source only means anything if somebody who registered
+     and then volunteered is in both. Defaults to the single source so callers
+     that have only that still work. */
+  sources = [],
+  /* The country on the row — where they FIRST arrived, and it never changes. */
   country = "",
+  /* ⚠ And the one they are acting through NOW, which is usually the same and
+     sometimes is not. A person known from India subscribing on the Canadian
+     site belongs on Canada's list too. */
+  countries = [],
   subscribedAt,
 }) {
   if (!CONTACTS_ENABLED) return { synced: false, reason: "contacts-disabled" };
@@ -148,16 +154,12 @@ export async function syncContact({
      them, and Resend refuses the whole contact when they do not — so this comes
      first. On failure the contact is still synced, WITHOUT its properties: a
      person on the list who cannot be segmented is worth having, and a person
-     missing entirely is not. The log says which happened. */
+     missing entirely is not. `tagged` in the return value says which happened. */
   let tagged = true;
   try {
     await ensureProperties();
-  } catch (err) {
+  } catch {
     tagged = false;
-    console.error(
-      "Resend contact properties could not be ensured — syncing untagged:",
-      err?.message ?? err
-    );
   }
 
   /* ⚠ Resend's flag is the NEGATIVE of Iwan's: `unsubscribed`, not
@@ -167,10 +169,19 @@ export async function syncContact({
     unsubscribed: !subscribed,
     ...splitName(name),
     ...(tagged ? { properties: properties({ source, country, subscribedAt }) } : {}),
-    /* Optional. With no segment configured the contact still lands in the
-       account's contact list — a segment is a grouping, not a requirement. */
-    ...(CONFIG.resendSegmentId ? { segments: [{ id: CONFIG.resendSegmentId }] } : {}),
   };
+
+  /* ⚠ Resolved BEFORE the create, because a new contact carries its segments on
+     that one call — adding them afterwards would be a request each. See
+     lib/segments.js; it creates any that do not exist yet. */
+  const segmentIds = await segmentsFor({
+    /* ⚠ Both, de-duplicated: where they started and where they are acting now.
+       `country` alone is the row's first-seen one, which never changes. */
+    countries: [...new Set([country, ...countries].filter(Boolean))],
+    sources: sources.length ? sources : [source].filter(Boolean),
+  });
+
+  if (segmentIds.length) payload.segments = segmentIds.map((id) => ({ id }));
 
   try {
     /* ⚠ The SDK REPORTS errors in the result rather than throwing, exactly as
@@ -180,22 +191,24 @@ export async function syncContact({
     if (!created.error) return { synced: true, id: created.data?.id, tagged };
 
     if (!alreadyExists(created.error)) {
-      console.error("Resend contact create failed:", created.error);
       return { synced: false, reason: created.error.message ?? "create-failed" };
     }
 
     /* Already there: update the copy by email. ⚠ `segments` is not accepted on
-       update, which is why it is only on the create above — an existing
-       contact keeps whatever segments it has been given. */
+       update, so membership has to be written separately — which is why this
+       path costs more calls than a create. */
     const { segments, ...update } = payload;
     const updated = await resend.contacts.update(update);
     if (updated.error) {
-      console.error("Resend contact update failed:", updated.error);
       return { synced: false, reason: updated.error.message ?? "update-failed" };
     }
+
+    /* ⚠ After the update, not before: a contact that failed to update is not
+       one we want quietly filed into a segment. */
+    await addToSegments(address, segmentIds);
+
     return { synced: true, id: updated.data?.id, tagged };
   } catch (err) {
-    console.error("Resend contact sync threw:", err);
     return { synced: false, reason: err?.message ?? "sync-threw" };
   }
 }
@@ -219,30 +232,22 @@ export async function removeContact(email) {
     /* ⚠ Not there is the state we wanted. Deleting a person the mirror never
        received is a success, not a failure to report. */
     if (error && !/not.?found/i.test(error.message ?? "")) {
-      console.error("Resend contact remove failed:", error);
       return { removed: false, reason: error.message ?? "remove-failed" };
     }
     return { removed: true };
   } catch (err) {
-    console.error("Resend contact remove threw:", err);
     return { removed: false, reason: err?.message ?? "remove-threw" };
   }
 }
 
-/* ⚠ Fire-and-forget, with the rejection swallowed — the same shape as `notify`
-   in mail.js and for the same reason. syncContact already never throws, so this
-   is belt and braces against a future edit that makes it: an unhandled
-   rejection takes the process down on Node. */
-export const mirrorContact = (person) => {
-  void syncContact(person).catch((err) =>
-    console.error("Contact sync threw past its own guard:", err)
-  );
-};
+/* ⚠ MUST BE AWAITED, and before the response — the same shape as `notify` in
+   mail.js and for the same reason. See lib/background.js: a promise nobody
+   waits on is abandoned the moment a Vercel function answers, which is exactly
+   why a subscriber could be stored here and never appear in Resend. */
+export const mirrorContact = (person) =>
+  background("contact sync", () => syncContact(person));
 
-export const forgetContact = (email) => {
-  void removeContact(email).catch((err) =>
-    console.error("Contact removal threw past its own guard:", err)
-  );
-};
+export const forgetContact = (email) =>
+  background("contact removal", () => removeContact(email));
 
 export default syncContact;
