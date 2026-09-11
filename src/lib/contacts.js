@@ -1,6 +1,7 @@
 import { CONFIG } from "../config.js";
 import { resend } from "./resendClient.js";
 import { background } from "./background.js";
+import { addToSegments, segmentsFor } from "./segments.js";
 
 /* The audience list, mirrored into Resend.
 
@@ -129,7 +130,17 @@ export async function syncContact({
   name = "",
   subscribed = true,
   source = "",
+  /* ⚠ EVERY form this person has come through, not just the one in front of
+     us — a segment per source only means anything if somebody who registered
+     and then volunteered is in both. Defaults to the single source so callers
+     that have only that still work. */
+  sources = [],
+  /* The country on the row — where they FIRST arrived, and it never changes. */
   country = "",
+  /* ⚠ And the one they are acting through NOW, which is usually the same and
+     sometimes is not. A person known from India subscribing on the Canadian
+     site belongs on Canada's list too. */
+  countries = [],
   subscribedAt,
 }) {
   if (!CONTACTS_ENABLED) return { synced: false, reason: "contacts-disabled" };
@@ -158,10 +169,19 @@ export async function syncContact({
     unsubscribed: !subscribed,
     ...splitName(name),
     ...(tagged ? { properties: properties({ source, country, subscribedAt }) } : {}),
-    /* Optional. With no segment configured the contact still lands in the
-       account's contact list — a segment is a grouping, not a requirement. */
-    ...(CONFIG.resendSegmentId ? { segments: [{ id: CONFIG.resendSegmentId }] } : {}),
   };
+
+  /* ⚠ Resolved BEFORE the create, because a new contact carries its segments on
+     that one call — adding them afterwards would be a request each. See
+     lib/segments.js; it creates any that do not exist yet. */
+  const segmentIds = await segmentsFor({
+    /* ⚠ Both, de-duplicated: where they started and where they are acting now.
+       `country` alone is the row's first-seen one, which never changes. */
+    countries: [...new Set([country, ...countries].filter(Boolean))],
+    sources: sources.length ? sources : [source].filter(Boolean),
+  });
+
+  if (segmentIds.length) payload.segments = segmentIds.map((id) => ({ id }));
 
   try {
     /* ⚠ The SDK REPORTS errors in the result rather than throwing, exactly as
@@ -175,13 +195,18 @@ export async function syncContact({
     }
 
     /* Already there: update the copy by email. ⚠ `segments` is not accepted on
-       update, which is why it is only on the create above — an existing
-       contact keeps whatever segments it has been given. */
+       update, so membership has to be written separately — which is why this
+       path costs more calls than a create. */
     const { segments, ...update } = payload;
     const updated = await resend.contacts.update(update);
     if (updated.error) {
       return { synced: false, reason: updated.error.message ?? "update-failed" };
     }
+
+    /* ⚠ After the update, not before: a contact that failed to update is not
+       one we want quietly filed into a segment. */
+    await addToSegments(address, segmentIds);
+
     return { synced: true, id: updated.data?.id, tagged };
   } catch (err) {
     return { synced: false, reason: err?.message ?? "sync-threw" };

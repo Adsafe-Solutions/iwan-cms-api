@@ -1,9 +1,9 @@
-import { escapeHtml } from "./registration.js";
+import { dropSection, lower, render } from "./render.js";
 
 /* "We have your application" — the volunteer and career equivalent of the
    registration confirmation.
 
-   ⚠ THE FALLBACK, NOT THE DESIGN. The designed templates live in Resend under
+   ⚠ RESEND'S TEMPLATE WINS WHERE THERE IS ONE, under
    `iwan-application-{in,ca}`; this renders when there is no published one, or
    Resend cannot be reached. Same rule as the confirmation — see
    lib/templates.js.
@@ -12,19 +12,6 @@ import { escapeHtml } from "./registration.js";
    and a job application get the same acknowledgement in different words, and
    two near-identical templates would drift apart the first time one was
    edited. */
-
-const BRAND = {
-  primary: "#244967",
-  accent: "#f9be00",
-  ink: "#0a1020",
-  muted: "#5b6b80",
-  line: "#e4e8f0",
-  mist: "#f7f9fc",
-  white: "#ffffff",
-};
-
-const FONT =
-  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'DM Sans', Roboto, Helvetica, Arial, sans-serif";
 
 /* ⚠ What each kind is CALLED, in one place. The wording reaches the subject
    line, the body and the Resend template's `application_type`, and the three
@@ -83,6 +70,7 @@ export function renderApplicationConfirmation({
   name = "",
   role = "",
   siteUrl = "",
+  country = "in",
   brandName = "Iwan Community",
 } = {}) {
   const words = APPLICATION_WORDING[kind] ?? APPLICATION_WORDING.volunteer;
@@ -97,84 +85,16 @@ export function renderApplicationConfirmation({
      just sent — and applying for a role is not joining a mailing list. Anyone
      who ticked the newsletter box on the same form gets the welcome separately,
      and that one carries its own. */
-  /* The same three facts the designed template shows in its panel. */
-  const row = (label, value) => `
-                <tr>
-                  <td style="padding:0 0 12px 0;font-family:${FONT};font-size:12px;line-height:18px;color:${BRAND.muted};font-weight:700;text-transform:uppercase;letter-spacing:0.08em;width:110px;vertical-align:top;">${escapeHtml(label)}</td>
-                  <td style="padding:0 0 12px 0;font-family:${FONT};font-size:15px;line-height:22px;color:${BRAND.ink};font-weight:600;vertical-align:top;">${escapeHtml(value)}</td>
-                </tr>`;
+  /* ⚠ The designed file in templates/ — the SAME one uploaded to Resend, so
+     the fallback and the Template render identically. */
+  let html = render(
+    `application-${country === "ca" ? "ca" : "in"}.html`,
+    lower({ ...values, site_url: siteUrl })
+  );
 
-  const details = `
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:${BRAND.mist};border:1px solid ${BRAND.line};border-radius:8px;margin:0 0 20px 0;">
-              <tr><td style="padding:20px 22px 8px 22px;">
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-${row("Application", values.APPLICATION_TYPE)}
-${row("Interested in", values.ROLE)}
-${row("Received", values.SUBMITTED_ON)}
-                </table>
-              </td></tr>
-            </table>`;
-
-  const button = siteUrl
-    ? `
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:6px 0 0 0;">
-              <tr>
-                <td align="center" bgcolor="${BRAND.primary}" style="border-radius:6px;">
-                  <a href="${escapeHtml(siteUrl)}" target="_blank" style="display:inline-block;padding:13px 26px;font-family:${FONT};font-size:15px;font-weight:700;color:${BRAND.white};text-decoration:none;border-radius:6px;">See what's on</a>
-                </td>
-              </tr>
-            </table>`
-    : "";
-
-  const html = `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="color-scheme" content="light" />
-<title>${escapeHtml(subject)}</title>
-</head>
-<body style="margin:0;padding:0;background-color:${BRAND.mist};">
-<div style="display:none;font-size:1px;color:${BRAND.mist};line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">${escapeHtml(words.intro)}</div>
-
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:${BRAND.mist};">
-  <tr>
-    <td align="center" style="padding:32px 16px;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:600px;max-width:100%;background-color:${BRAND.white};border-radius:8px;overflow:hidden;border:1px solid ${BRAND.line};">
-
-        <tr>
-          <td style="background-color:${BRAND.primary};padding:22px 32px;">
-            <span style="font-family:${FONT};font-size:15px;font-weight:800;color:${BRAND.white};letter-spacing:0.04em;">${escapeHtml(brandName)}</span>
-          </td>
-        </tr>
-        <tr>
-          <td style="height:4px;background-color:${BRAND.accent};font-size:0;line-height:0;">&nbsp;</td>
-        </tr>
-
-        <tr>
-          <td style="padding:34px 32px 34px 32px;">
-            <h1 style="margin:0 0 6px 0;font-family:${FONT};font-size:24px;line-height:31px;font-weight:800;color:${BRAND.ink};">${escapeHtml(words.heading)}</h1>
-            <p style="margin:0 0 20px 0;font-family:${FONT};font-size:16px;line-height:24px;color:${BRAND.muted};">${escapeHtml(greeting)}</p>
-            <p style="margin:0 0 18px 0;font-family:${FONT};font-size:16px;line-height:24px;color:${BRAND.ink};">${escapeHtml(words.intro)}</p>
-${details}
-            <p style="margin:0 0 14px 0;font-family:${FONT};font-size:15px;line-height:23px;color:${BRAND.muted};"><strong style="color:${BRAND.ink};">What happens next.</strong> Someone reads every application properly. If it looks like a fit we will write to arrange a conversation — usually within two weeks. We do not always manage to reply to each one, but nothing is discarded.</p>
-            <p style="margin:0 0 22px 0;font-family:${FONT};font-size:15px;line-height:23px;color:${BRAND.muted};">Anything to add — a portfolio, a CV, dates you are away — just reply to this email and it reaches the same place.</p>
-${button}
-          </td>
-        </tr>
-
-        <tr>
-          <td style="background-color:${BRAND.mist};border-top:1px solid ${BRAND.line};padding:18px 32px;">
-            <p style="margin:0;font-family:${FONT};font-size:12px;line-height:18px;color:${BRAND.muted};">You are receiving this because you sent us a ${escapeHtml(values.APPLICATION_TYPE)} application at ${escapeHtml(brandName)}.</p>
-          </td>
-        </tr>
-
-      </table>
-    </td>
-  </tr>
-</table>
-</body>
-</html>`;
+  /* ⚠ Same rule as the unsubscribe row: no address to point at means DROP the
+     button, not render one that goes nowhere. */
+  if (!siteUrl) html = dropSection(html, "CTA");
 
   const text = [
     greeting,
@@ -187,11 +107,13 @@ ${button}
     "",
     "What happens next. Someone reads every application properly. If it looks like a fit we will write to arrange a conversation — usually within two weeks. We do not always manage to reply to each one, but nothing is discarded.",
     "",
-    "Anything to add — a portfolio, a CV, dates you are away — just reply to this email and it reaches the same place.",
     siteUrl && "",
     siteUrl && `See what's on: ${siteUrl}`,
     "",
-    `— ${brandName}`,
+    /* ⚠ "Team Iwan", not the brand name — it matches how the designed
+       templates sign off, and a person reads one immediately after the other.
+       `brandName` still names the organisation in the sentences ABOUT it. */
+    "— Team Iwan",
   ]
     .filter((line) => line !== false && line !== undefined)
     .join("\n");

@@ -34,6 +34,7 @@ const { renderRegistrationConfirmation } =
 const { renderSubscribeWelcome } = await import("../src/lib/emails/subscribe.js");
 const { renderApplicationConfirmation } =
   await import("../src/lib/emails/application.js");
+const { renderContactConfirmation } = await import("../src/lib/emails/contact.js");
 
 /* Plausible values rather than "test test test": the point is to see what a
    real one looks like, including how a long venue or a missing name lands. */
@@ -86,6 +87,16 @@ const previews = [
     renderApplicationConfirmation({
       kind: "volunteer",
       name: "Aisha Rahman",
+      siteUrl: SITE,
+    }),
+  ],
+  [
+    "contact",
+    renderContactConfirmation({
+      name: "Aisha Rahman",
+      subject: "Can I bring my sister to the gardening session?",
+      message:
+        "Assalamu alaikum,\n\nI came to the last one and my sister would like to join too. Is there room, and does she need to register separately?\n\nJazakallah khair.",
       siteUrl: SITE,
     }),
   ],

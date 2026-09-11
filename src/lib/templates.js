@@ -47,6 +47,11 @@ export const aliasesFor = (kind, { country = "" } = {}) => {
     return [country && `${base}-${country}`, base].filter(Boolean);
   }
 
+  if (kind === "contact") {
+    const base = CONFIG.templates.contact || "iwan-contact";
+    return [country && `${base}-${country}`, base].filter(Boolean);
+  }
+
   if (kind !== "registration") return [];
 
   return [country && `${REGISTRATION}-${country}`, REGISTRATION].filter(Boolean);

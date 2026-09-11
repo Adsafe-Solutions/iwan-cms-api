@@ -11,6 +11,7 @@ import {
   applicationValues,
   renderApplicationConfirmation,
 } from "./emails/application.js";
+import { contactValues, renderContactConfirmation } from "./emails/contact.js";
 import { unsubscribeUrl } from "./tokens.js";
 import { background } from "./background.js";
 import { resolveTemplate, variables } from "./templates.js";
@@ -94,6 +95,7 @@ export async function sendRegistrationConfirmation({ registration, event }) {
 
   const { subject, html, text } = renderRegistrationConfirmation({
     ...content,
+    country,
     subscribed: showLink,
   });
 
@@ -204,6 +206,7 @@ export async function sendApplicationConfirmation({
     name,
     role,
     siteUrl,
+    country,
   });
 
   const template = await resolveTemplate("application", { country });
@@ -226,6 +229,74 @@ export async function sendApplicationConfirmation({
         ...(template.subject ? {} : { subject }),
       }
     : { subject, html, text };
+
+  try {
+    const { data, error } = await resend.emails.send({
+      from: CONFIG.mailFrom,
+      to: [email],
+      ...body,
+      ...(CONFIG.mailReplyTo ? { replyTo: CONFIG.mailReplyTo } : {}),
+    });
+
+    if (error) return { sent: false, reason: error.message ?? "send-failed" };
+    return { sent: true, id: data?.id };
+  } catch (err) {
+    return { sent: false, reason: err?.message ?? "send-threw" };
+  }
+}
+
+/**
+ * Acknowledges a contact-form message to the person who sent it.
+ *
+ * ⚠ NEVER THROWS, same contract as every send here.
+ *
+ * ⚠ NO UNSUBSCRIBE LINK AND NO List-Unsubscribe HEADER. Writing to an
+ * organisation is not joining its mailing list — this is a reply to something
+ * the person just sent. Whoever ticked the newsletter box on the same form gets
+ * the welcome separately, and that one carries its own.
+ *
+ * @returns {Promise<{sent: boolean, reason?: string, id?: string}>}
+ */
+export async function sendContactConfirmation({
+  email,
+  name = "",
+  subject = "",
+  message = "",
+  country = "",
+}) {
+  if (!MAIL_ENABLED) return { sent: false, reason: "mail-disabled" };
+  if (!email) return { sent: false, reason: "no-address" };
+
+  const siteUrl =
+    CONFIG.siteUrl && country === "ca"
+      ? `${CONFIG.siteUrl.replace(/\/$/, "")}/ca`
+      : CONFIG.siteUrl;
+
+  const rendered = renderContactConfirmation({
+    name,
+    subject,
+    message,
+    siteUrl,
+    country,
+  });
+  const template = await resolveTemplate("contact", { country });
+
+  const body = template
+    ? {
+        template: {
+          id: template.id,
+          variables: variables({
+            ...Object.fromEntries(
+              Object.entries(contactValues({ name, subject, message })).map(
+                ([key, value]) => [key.toLowerCase(), value]
+              )
+            ),
+            site_url: siteUrl,
+          }),
+        },
+        ...(template.subject ? {} : { subject: rendered.subject }),
+      }
+    : { subject: rendered.subject, html: rendered.html, text: rendered.text };
 
   try {
     const { data, error } = await resend.emails.send({
@@ -310,6 +381,7 @@ export async function sendSubscribeWelcome({ email, name = "", country = "" }) {
     name: firstNameOf(name),
     unsubscribeUrl: unsubscribe,
     siteUrl,
+    country,
   });
 
   /* Same rule as the confirmation: Resend's template wins where there is a

@@ -41,6 +41,7 @@ export const CONFIG = {
     welcome: process.env.RESEND_TEMPLATE_WELCOME ?? "",
     /* Volunteer and career share one — the kind is a variable on it. */
     application: process.env.RESEND_TEMPLATE_APPLICATION ?? "",
+    contact: process.env.RESEND_TEMPLATE_CONTACT ?? "",
   },
 
   /* Optional. The Resend SEGMENT mirrored subscribers are added to — the list a

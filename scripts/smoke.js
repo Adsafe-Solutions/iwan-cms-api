@@ -2768,6 +2768,106 @@ await check("⚠ a viewer cannot write the audience", async () => {
 
 console.log("\nthe Resend contact sync");
 
+await check("⚠ exactly THREE segments, because the plan allows three", async () => {
+  /* Resend caps segments by plan. These are the ones worth spending them on —
+     the two countries, which decide which newsletter somebody should get, and
+     event registrations. Everybody else stays findable by their `source`
+     property, which every contact carries.
+     ⚠ Adding a name here costs a segment on the account. */
+  const { SEGMENT_NAMES } = await import("../src/lib/segments.js");
+  assert.deepEqual(Object.keys(SEGMENT_NAMES).sort(), ["ca", "event", "in"]);
+
+  /* ⚠ No segment for subscribers: Resend already records `unsubscribed` on
+     every contact, so one would only restate it. */
+  assert.equal(SEGMENT_NAMES.subscribe, undefined);
+});
+
+await check("⚠ no box ticked: the CONFIRMATION sends, the WELCOME does not", async () => {
+  /* The two emails answer different questions. A confirmation is the receipt
+     for a thing the person just did and goes to everybody who registers; the
+     welcome starts a mailing relationship and goes only to whoever asked for
+     one. Getting this backwards either loses somebody their booking receipt or
+     mails somebody who never opted in. */
+  const { Audience } = await import("../src/models/Audience.js");
+  const { welcomeSubscriber } = await import("../src/lib/welcome.js");
+  const { sendRegistrationConfirmation } = await import("../src/lib/mail.js");
+
+  await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: { answers: REG({ email: "receipt-only@example.com" }) },
+  });
+  const row = await Audience.findOne({ email: "receipt-only@example.com" }).lean();
+  assert.equal(row.subscribed, false);
+
+  /* ⚠ The welcome REFUSES on the subscription, before mail is even consulted. */
+  assert.deepEqual(await welcomeSubscriber(row, "ca"), {
+    sent: false,
+    reason: "not-subscribed",
+  });
+
+  /* ⚠ The confirmation does NOT look at the subscription at all — mail being
+     off in this run is the only thing stopping it, which is the point. */
+  const confirmation = await sendRegistrationConfirmation({
+    registration: { email: "receipt-only@example.com", name: "R", country: "ca" },
+    event: { title: "Fishing Day", slug: "fishing-day" },
+  });
+  assert.equal(confirmation.reason, "mail-disabled", "it stopped for the wrong reason");
+});
+
+await check("⚠ EVERYONE is mirrored, subscribed or not", async () => {
+  /* The event segment is the list of who came, not of who wants mail. Leaving
+     non-subscribers out made it silently incomplete — somebody who registered
+     without ticking the box still registered.
+
+     ⚠ What protects them is the FLAG: the contact goes to Resend marked
+     `unsubscribed`, which every broadcast skips. The audience row is what this
+     asserts, since there is no key in this run to check the push itself. */
+  const { Audience } = await import("../src/models/Audience.js");
+
+  await call("POST", "/api/events/fishing-day/register?country=ca", {
+    body: { answers: REG({ email: "no-box-ticked@example.com" }) },
+  });
+
+  const row = await Audience.findOne({ email: "no-box-ticked@example.com" }).lean();
+  assert.ok(row, "somebody who did not subscribe still belongs in the audience");
+  assert.equal(row.subscribed, false, "an untouched box must not opt anybody in");
+  assert.ok(row.sources.includes("event"));
+
+  /* ⚠ And they are NOT welcomed — mirrored is not the same as mailed. */
+  const { welcomeSubscriber } = await import("../src/lib/welcome.js");
+  assert.deepEqual(await welcomeSubscriber(row, "ca"), {
+    sent: false,
+    reason: "not-subscribed",
+  });
+});
+
+await check("⚠ BOTH countries, not just the one they first arrived from", async () => {
+  /* A person known from India who subscribes on the Canadian site belongs on
+     Canada's list too. The audience row keeps only the FIRST country and never
+     changes it, so filing by that alone meant the Canadian segment was never
+     created for anyone already known — which is exactly how it looked in the
+     dashboard. */
+  const { segmentsFor } = await import("../src/lib/segments.js");
+  /* No key in this run, so this asserts the SHAPE rather than the round trip —
+     the real behaviour is covered against a stubbed account. */
+  assert.deepEqual(await segmentsFor({ countries: ["in", "ca"], sources: [] }), []);
+
+  /* ⚠ What recordAudience actually hands over: where they started, and where
+     they are acting now. */
+  const { Audience } = await import("../src/models/Audience.js");
+  await call("POST", "/api/subscribe?country=ca", {
+    body: { email: "moved-country@example.com" },
+  });
+  const row = await Audience.findOne({ email: "moved-country@example.com" }).lean();
+  assert.equal(row.country, "ca", "the row records where they first arrived");
+});
+
+await check("segments resolve to nothing without a key", async () => {
+  /* No key means no account to ask, and a contact in no segment is still a
+     contact — it must not become an error on a form submission. */
+  const { segmentsFor } = await import("../src/lib/segments.js");
+  assert.deepEqual(await segmentsFor({ country: "in", sources: ["event"] }), []);
+});
+
 /* ⚠ These do NOT reach Resend. RESEND_API_KEY is empty for this run, so the
    sync is switched off and what is proved here is the property that matters:
    every form still works, and nothing waits on a third party. The push itself
@@ -3077,12 +3177,6 @@ await check("the unsubscribe link is NOT behind the forward secret", async () =>
   }
 });
 
-console.log("\nthe welcome email");
-
-/* ⚠ Mail is OFF in this run, so what is proved here is the LOGIC around the
-   send — sent once ever, never to someone who did not ask, and a failure that
-   does not consume the one chance. The message itself is rendered directly. */
-
 await check("⚠ background work is AWAITED on Vercel and nowhere else", async () => {
   /* THE FIX FOR THE BUG THAT STARTED THIS: a Vercel function is frozen the
      moment it answers, so a promise nobody waits on is abandoned — the sign-up
@@ -3198,8 +3292,17 @@ await check("⚠ unsubscribing EARNS A NEW WELCOME on coming back", async () => 
   assert.equal(off.subscribed, false);
   assert.deepEqual(off.welcomedCountries, [], "the claim survived an unsubscribe");
 
-  /* ...and subscribe again. The welcome is due once more. */
-  await call("POST", "/api/subscribe", { body: { email: "came-back@example.com" } });
+  /* ...and subscribe again.
+
+     ⚠ Written directly rather than posted to /api/subscribe: that route runs
+     its own welcome in the BACKGROUND, and off Vercel nothing waits for it —
+     it would race this test's call for the same claim and win at random. The
+     route's own path is covered by the checks above; what is under test here
+     is that the claim is available again. */
+  await Audience.updateOne(
+    { email: "came-back@example.com" },
+    { $set: { subscribed: true } }
+  );
   const again = await Audience.findOne({ email: "came-back@example.com" }).lean();
   assert.equal(again.subscribed, true);
 
@@ -3228,6 +3331,42 @@ await check("⚠ an admin unticking the box clears it too", async () => {
   assert.equal(after.subscribed, false);
   assert.deepEqual(after.welcomedCountries, [], "the claim survived a CMS unsubscribe");
 });
+
+await check(
+  "⚠ a row welcomed BEFORE the country list existed is not greeted twice",
+  async () => {
+    /* The field was added after the stamp, so every already-greeted row looked
+     un-greeted the day it shipped — and sent a second welcome to people who had
+     had one. The stamp is the evidence; the row's own country is the one. */
+    const { welcomeSubscriber } = await import("../src/lib/welcome.js");
+    const { Audience } = await import("../src/models/Audience.js");
+
+    await Audience.create({
+      email: "old-row@example.com",
+      subscribed: true,
+      sources: ["subscribe"],
+      country: "in",
+      welcomeSentAt: new Date("2026-01-01"),
+      /* ⚠ Empty — exactly how a row written before the field looks. */
+      welcomedCountries: [],
+    });
+
+    const person = await Audience.findOne({ email: "old-row@example.com" }).lean();
+    assert.deepEqual(await welcomeSubscriber(person, "in"), {
+      sent: false,
+      reason: "already-sent",
+    });
+
+    /* ...and the backfill is recorded, so it is decided once rather than on
+     every submission. */
+    const after = await Audience.findOne({ email: "old-row@example.com" }).lean();
+    assert.deepEqual(after.welcomedCountries, ["in"]);
+
+    /* ⚠ The OTHER country is still a separate opt-in — the backfill fills in what
+     is known, it does not claim the person was welcomed everywhere. */
+    assert.notEqual((await welcomeSubscriber(after, "ca")).reason, "already-sent");
+  }
+);
 
 await check("⚠ the OTHER country is a separate opt-in", async () => {
   /* India and Canada are different lists — different events, links and social
@@ -3330,7 +3469,7 @@ await check("the welcome message carries its unsubscribe link", async () => {
     siteUrl: "https://iwan.community",
   });
   assert.match(subject, /subscribed/i);
-  assert.match(html, /You're on the list/);
+  assert.match(html, /You&rsquo;re on the list/);
   assert.match(html, /api\/unsubscribe\?t=abc/);
   /* ⚠ In the text alternative too — this one is marketing, and a marketing
      message with no way off the list is what gets a domain blocked. */
@@ -3383,7 +3522,7 @@ await check("both kinds acknowledge the person who applied", async () => {
   });
   assert.match(volunteer.subject, /offering to help/i);
   /* ⚠ First name only, as everywhere else. */
-  assert.match(volunteer.html, /Hi Aisha,/);
+  assert.match(volunteer.html, /Assalamu alaikum Aisha/);
   assert.ok(!volunteer.html.includes("Rahman"));
 
   const career = renderApplicationConfirmation({
@@ -3397,6 +3536,90 @@ await check("both kinds acknowledge the person who applied", async () => {
   assert.ok(!volunteer.html.includes("Role:"), "a volunteer offer printed a role");
 });
 
+await check("the contact form acknowledges the sender, echoing the message", async () => {
+  /* ⚠ Until this existed somebody typed a long message into a box and got a
+     line on screen, with no proof it went anywhere. */
+  const { renderContactConfirmation, contactValues } =
+    await import("../src/lib/emails/contact.js");
+  const { html, text, subject } = renderContactConfirmation({
+    name: "Aisha Rahman",
+    subject: "Can I bring my sister?",
+    message: "Is there room at the gardening session?",
+    siteUrl: "https://iwan.community",
+  });
+  assert.match(subject, /have your message/i);
+  assert.match(html, /Assalamu alaikum Aisha/);
+  assert.match(html, /Can I bring my sister/);
+  assert.match(html, /gardening session/);
+  assert.match(text, /Is there room at the gardening session\?/);
+
+  /* ⚠ It came off a public form and is rendered into an inbox. */
+  const nasty = renderContactConfirmation({
+    name: "X",
+    subject: "<script>alert(1)</script>",
+    message: "<img src=x onerror=alert(1)>",
+  });
+  assert.ok(!nasty.html.includes("<script>"), "a script tag survived");
+  assert.ok(!nasty.html.includes("<img src=x"), "a tag survived");
+  assert.match(nasty.html, /&lt;script&gt;/);
+
+  /* ⚠ No value may be empty — Resend has no conditionals, so a blank renders
+     as a bare label. */
+  const blank = contactValues({});
+  for (const [key, value] of Object.entries(blank)) {
+    if (key === "FIRST_NAME") continue;
+    assert.ok(value, `${key} was empty`);
+  }
+
+  /* ⚠ Long messages are trimmed rather than filling the inbox preview. */
+  const long = contactValues({ message: "x".repeat(2000) });
+  assert.ok(long.MESSAGE.length < 700, "a very long message was echoed whole");
+});
+
+await check("⚠ a contact reply carries NO unsubscribe link", async () => {
+  /* Writing to an organisation is not joining its mailing list. */
+  const { renderContactConfirmation } = await import("../src/lib/emails/contact.js");
+  const { html, text } = renderContactConfirmation({ name: "A", subject: "Hi" });
+  /* ⚠ The LINK, not the word: the designed file carries comments explaining
+     why there is no unsubscribe here, and those mention it by name. */
+  assert.ok(!html.includes("api/unsubscribe"), "a link to unsubscribe was rendered");
+  assert.ok(!/href="[^"]*unsubscribe/i.test(html));
+  assert.ok(!text.toLowerCase().includes("unsubscribe"));
+});
+
+await check("⚠ only the FOOTER form ever says 'already subscribed'", async () => {
+  /* Every form carries the newsletter box, so the subscription happens in all
+     of them — but telling somebody "you are already subscribed" when they came
+     to send a message or apply for a job is answering a question they did not
+     ask. Only /api/subscribe reports it. */
+  const contact = await call("POST", "/api/contact", {
+    body: {
+      email: "quiet-flag@example.com",
+      name: "Quiet",
+      subject: "Nothing to report",
+      subscribe: true,
+    },
+  });
+  assert.equal(contact.status, 201);
+  assert.deepEqual(contact.body, { ok: true }, "the contact form leaked the flag");
+
+  /* ⚠ country=ca, matching the form this suite leaves in place — the sections
+     above edit the apply forms, and India's ends up with questions this body
+     does not answer. What is under test is the RESPONSE SHAPE, not the form. */
+  const volunteer = await call("POST", "/api/volunteer?country=ca", {
+    body: {
+      answers: { name: { first: "V", last: "Ol" }, email: "quiet-flag@example.com" },
+      subscribe: true,
+    },
+  });
+  assert.equal(volunteer.status, 201, JSON.stringify(volunteer.body));
+  assert.deepEqual(volunteer.body, { ok: true }, "the volunteer form leaked the flag");
+
+  /* ...but the subscription itself still happened, from those forms. */
+  const { body } = await call("GET", "/api/admin/audience?q=quiet-flag", { token });
+  assert.equal(body.items[0].subscribed, true, "the box was ticked and ignored");
+});
+
 await check("⚠ an application carries NO unsubscribe link", async () => {
   /* Applying for a role is not joining a mailing list. Offering to unsubscribe
      implies a subscription they never made — and the welcome, which they get
@@ -3404,7 +3627,9 @@ await check("⚠ an application carries NO unsubscribe link", async () => {
   const { renderApplicationConfirmation } =
     await import("../src/lib/emails/application.js");
   const { html, text } = renderApplicationConfirmation({ kind: "career", name: "Omar" });
-  assert.ok(!html.toLowerCase().includes("unsubscribe"));
+  /* ⚠ The LINK, not the word — see the contact check. */
+  assert.ok(!html.includes("api/unsubscribe"), "a link to unsubscribe was rendered");
+  assert.ok(!/href="[^"]*unsubscribe/i.test(html));
   assert.ok(!text.toLowerCase().includes("unsubscribe"));
 });
 
@@ -3412,7 +3637,7 @@ await check("an unknown kind falls back rather than failing to send", async () =
   const { renderApplicationConfirmation, applicationValues } =
     await import("../src/lib/emails/application.js");
   const { html } = renderApplicationConfirmation({ kind: "nonsense", name: "Sam" });
-  assert.match(html, /Hi Sam,/);
+  assert.match(html, /Assalamu alaikum Sam/);
   assert.equal(applicationValues({ kind: "nonsense" }).APPLICATION_TYPE, "volunteering");
 });
 
@@ -3544,9 +3769,14 @@ await check("the page fetches nothing and is not indexable", async () => {
   for (const tag of ["<script", "<link", "<form", "<iframe"]) {
     assert.ok(!html.includes(tag), `the page pulls in ${tag}`);
   }
-  const images = html.match(/<img[^>]*src="([^"]+)"/g) ?? [];
-  assert.equal(images.length, 1, "the page loads more than the logo");
-  assert.match(images[0], /^<img src="https:\/\/cdn\.iwan\.community\//);
+  /* ⚠ EVERY image must be on the one host the policy names — the page is the
+     site's designed shell, so it carries the logo and the social row. One from
+     anywhere else and the policy silently blocks it. */
+  const sources = [...html.matchAll(/<img[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(sources.length >= 1, "the page lost its logo");
+  for (const src of sources) {
+    assert.match(src, /^https:\/\/cdn\.iwan\.community\//, `off-policy image: ${src}`);
+  }
   assert.match(
     res.headers.get("content-security-policy") ?? "",
     /img-src https:\/\/cdn\.iwan\.community/
@@ -3593,12 +3823,12 @@ await check("the fallback shows its unsubscribe only to subscribers", async () =
     subscribed: true,
     unsubscribeUrl: "https://api.example.com/api/unsubscribe?t=abc",
   });
-  assert.match(shown.html, /Unsubscribe from our newsletter/);
+  assert.match(shown.html, /Unsubscribe/);
   assert.match(shown.html, /api\/unsubscribe\?t=abc/);
   assert.match(shown.text, /Unsubscribe from our newsletter: https:/);
   /* ⚠ FIRST name only — the designed template greets with it, so the same
        value must go under the same name whichever renders. */
-  assert.match(shown.html, /Hi Aisha,/);
+  assert.match(shown.html, /Assalamu alaikum Aisha/);
   assert.ok(!shown.html.includes("Rahman"), "the greeting used the full name");
 
   const hidden = renderRegistrationConfirmation({
@@ -3607,12 +3837,13 @@ await check("the fallback shows its unsubscribe only to subscribers", async () =
     subscribed: false,
     unsubscribeUrl: "https://api.example.com/api/unsubscribe?t=abc",
   });
-  assert.ok(
-    !hidden.html.includes("Unsubscribe from our newsletter"),
-    "offered to someone who never subscribed"
-  );
-  assert.ok(!hidden.html.includes("api/unsubscribe"), "the link survived the block");
-  assert.ok(!hidden.text.includes("Unsubscribe"));
+  /* ⚠ THE DESIGNED FILE SHOWS THE BLOCK TO EVERYBODY, because Resend Templates
+     have no conditionals and the same file is rendered on both sides — so the
+     gate cannot live in the markup. The link is right for either reader: it
+     takes a subscriber off the list and does nothing for somebody never on it.
+     What the TEXT alternative does gate, because it is built here. */
+  assert.match(hidden.html, /api\/unsubscribe/, "the designed block should show");
+  assert.ok(!hidden.text.includes("Unsubscribe"), "the text alternative did not gate");
 });
 
 await check("the confirmation carries the EVENT's own image", async () => {
@@ -3658,7 +3889,10 @@ await check("no link and no headers when API_URL is unset", async () => {
     subscribed: true,
     unsubscribeUrl: "",
   });
-  assert.ok(!html.includes("Unsubscribe"), "a dead unsubscribe link");
+  /* ⚠ NO LINK MEANS THE WHOLE ROW GOES. Rendering it with an empty href would
+     put a button leading nowhere in front of everyone who registers. */
+  assert.ok(!html.includes("api/unsubscribe"), "a dead unsubscribe link");
+  assert.ok(!html.includes('href=""'), "an empty href survived");
   assert.ok(!text.includes("Unsubscribe"));
 });
 

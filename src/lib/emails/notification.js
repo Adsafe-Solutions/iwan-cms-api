@@ -1,4 +1,7 @@
-import { escapeHtml } from "./registration.js";
+/* ⚠ This one keeps its own markup. It is the message to IWAN's own inbox —
+   internal, never designed, and deliberately not one of the templates the site
+   repo owns: nobody is going to art-direct a form notification. */
+import { escapeHtml } from "./render.js";
 
 /* The heads-up Iwan gets when someone fills in a form — a registration, a
    message, an application, a subscription.

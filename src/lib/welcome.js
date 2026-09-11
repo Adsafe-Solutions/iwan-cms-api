@@ -35,6 +35,24 @@ export async function welcomeSubscriber(person, country = "") {
      fill one in have not ticked the box. */
   if (!person.subscribed) return { sent: false, reason: "not-subscribed" };
 
+  /* ⚠ A ROW WELCOMED BEFORE THIS FIELD EXISTED counts as done for its OWN
+     country. `welcomedCountries` was added after `welcomeSentAt`, so every row
+     that had already been greeted looked un-greeted the moment it shipped —
+     and greeted them a second time. The stamp is the evidence; the country is
+     the one they arrived through.
+
+     ⚠ It is a BACKFILL, not a rule: it applies only where the list is still
+     empty. Once a row has any country in it, the list is the whole truth. */
+  if (person.welcomeSentAt && !(person.welcomedCountries ?? []).length) {
+    await Audience.updateOne(
+      { _id: person._id, welcomedCountries: { $size: 0 } },
+      { $addToSet: { welcomedCountries: person.country ?? country } }
+    );
+    if ((person.country ?? country) === country) {
+      return { sent: false, reason: "already-sent" };
+    }
+  }
+
   /* ⚠ PER COUNTRY, not per person — see the model. The claim is conditional on
      this country not being in the list, so two submissions landing together
      still send exactly one. */

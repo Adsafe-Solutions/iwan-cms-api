@@ -71,6 +71,21 @@ try {
   seedError = err.message.split("\n")[0];
 }
 
+/* ⚠ The volunteer and career forms, which are CONTENT — they live in the CMS,
+   not in code, so an empty database has neither and both routes answer "this
+   form is not accepting applications right now". The deployed API does this at
+   boot (see src/server.js); without it here, two of the four public forms
+   cannot be tried locally at all. */
+const { ensureDefaultApplyForms } = await import("../src/lib/applyForms.js");
+await ensureDefaultApplyForms();
+
+/* ⚠ ACTIVATED, which the deployed API deliberately does NOT do: a default form
+   arrives switched off so nobody's site starts taking applications against
+   questions an editor has never read. Locally that leaves both routes refusing
+   every submission, which is not a useful thing to be unable to try. */
+const { ApplyForm } = await import("../src/models/ApplyForm.js");
+await ApplyForm.updateMany({}, { $set: { active: true } });
+
 /* ⚠ ONE DEMO EVENT WHEN THERE IS NOTHING TO REGISTER FOR. The public site no
    longer ships events, blogs, podcast or promo — they come from this API now —
    so there is usually nothing for `seedInto` to read and the database comes up

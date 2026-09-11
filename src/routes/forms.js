@@ -5,7 +5,11 @@ import { Application } from "../models/Application.js";
 import { badRequest, wrap } from "../lib/errors.js";
 import { validate } from "../middleware/validate.js";
 import { recordAudience } from "../lib/audience.js";
-import { notify, sendApplicationConfirmation } from "../lib/mail.js";
+import {
+  notify,
+  sendApplicationConfirmation,
+  sendContactConfirmation,
+} from "../lib/mail.js";
 import { COUNTRY_CODES, isCountryCode } from "../lib/countries.js";
 import { buildAnswers, summarise } from "../validators/registration.js";
 import { contactInput, subscribeInput } from "../validators/forms.js";
@@ -109,6 +113,19 @@ router.post(
       country,
       message: { subject, body: message },
     });
+
+    /* ⚠ The sender's own copy — until now they typed a message into a box and
+       got a line on screen, with no proof it went anywhere. Awaited and before
+       the response, like everything else that leaves this process. */
+    await background("contact confirmation", () =>
+      sendContactConfirmation({
+        email: person.email,
+        name: person.name,
+        subject,
+        message,
+        country,
+      })
+    );
 
     /* ⚠ The contact form carries the same newsletter box as the footer, so it
        is the same act and gets the same email. `welcome` decides — it does

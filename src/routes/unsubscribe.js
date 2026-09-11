@@ -4,6 +4,7 @@ import { CONFIG } from "../config.js";
 import { readUnsubscribe } from "../lib/tokens.js";
 import { mirrorContact } from "../lib/contacts.js";
 import { wrap } from "../lib/errors.js";
+import { render } from "../lib/emails/render.js";
 
 /* The unsubscribe link in a transactional email.
 
@@ -27,87 +28,25 @@ import { wrap } from "../lib/errors.js";
 
 const router = Router();
 
-/* ⚠ THE SAME DESIGN AS THE EMAILS, because this page is what the unsubscribe
-   link in one of them opens. The palette, the navy band, the accent stripe and
-   the logo are the designed template's own — somebody arriving here from that
-   email must not think they have landed on a different organisation's page.
+/* ⚠ THE PAGE IS A DESIGNED FILE, NOT MARKUP WRITTEN HERE.
+   `emails/templates/unsubscribe.html` shares the emails' own shell, so somebody
+   clicking out of one does not land on a different organisation's page. It is
+   edited there, beside them.
 
-   ⚠ Values copied, not imported: the templates live in Resend now, so there is
-   nothing here to import them from. They change rarely and a mismatch is
-   cosmetic, which is the trade being made. */
-const BRAND = {
-  primary: "#244967",
-  accent: "#f9be00",
-  ink: "#0a1020",
-  muted: "#5b6b80",
-  line: "#e4e8f0",
-  /* ⚠ The emails' own ground, not a generic grey — this is what makes the page
-     read as a continuation of the message rather than a separate site. */
-  paper: "#efeae1",
-  white: "#ffffff",
-};
+   ⚠ Resend cannot host it: their unsubscribe page is for BROADCASTS only and is
+   configured with a title and colours rather than markup. */
 
-/* The emails' stack, so the type matches what was just read. */
-const FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
-
-/* ⚠ The logo is a WebP on Iwan's CDN, and the alt text is STYLED on purpose:
-   it is a real fallback that reads as a wordmark when the image is blocked or
-   the browser cannot draw it, rather than a broken-image icon. The email
-   templates do exactly this, for Outlook. */
-const LOGO = "https://cdn.iwan.community/iwan_single_logo.webp";
-
-/* ⚠ Nothing user-supplied reaches this page — the heading and message are
-   chosen from the fixed set below, and the address is never echoed back. An
-   address printed here would be reflected from a URL anyone can craft. */
-const page = ({ title, heading, message, cta = "" }) => `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${title}</title>
-</head>
-<body style="margin:0;padding:0;background:${BRAND.paper};">
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${BRAND.paper};min-height:100vh;">
-  <tr>
-    <td align="center" valign="middle" style="padding:48px 16px;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="width:560px;max-width:100%;background:${BRAND.white};border:1px solid ${BRAND.line};border-radius:12px;overflow:hidden;">
-
-        <tr>
-          <td style="background:${BRAND.primary};padding:20px 32px;">
-            <img src="${LOGO}" width="46" height="45" alt="Iwan"
-                 style="display:block;width:46px;height:auto;font-family:${FONT};font-size:16px;font-weight:bold;color:${BRAND.white};text-decoration:none;" />
-          </td>
-        </tr>
-        <tr><td style="height:4px;background:${BRAND.accent};font-size:0;line-height:0;">&nbsp;</td></tr>
-
-        <tr>
-          <td style="padding:36px 32px 38px 32px;">
-            <h1 style="margin:0 0 12px 0;font-family:${FONT};font-size:23px;line-height:31px;font-weight:700;color:${BRAND.ink};">${heading}</h1>
-            <p style="margin:0;font-family:${FONT};font-size:16px;line-height:26px;color:${BRAND.muted};">${message}</p>
-${cta}
-          </td>
-        </tr>
-
-      </table>
-    </td>
-  </tr>
-</table>
-</body>
-</html>`;
-
-/* The way back to the site. ⚠ Dropped entirely when SITE_URL is unset — a
-   button leading nowhere is worse than no button. */
-const backToSite = () =>
-  CONFIG.siteUrl
-    ? `
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 0 0;">
-              <tr>
-                <td align="center" bgcolor="${BRAND.primary}" style="border-radius:6px;">
-                  <a href="${CONFIG.siteUrl}" style="display:inline-block;padding:13px 26px;font-family:${FONT};font-size:15px;font-weight:700;color:${BRAND.white};text-decoration:none;border-radius:6px;">Back to iwan.community</a>
-                </td>
-              </tr>
-            </table>`
-    : "";
+/* ⚠ Nothing user-supplied reaches it. The heading and message are chosen from
+   the fixed set below and the address is never echoed back — an address printed
+   here would be reflected from a URL anyone can craft. */
+const page = ({ heading, message }) =>
+  render("unsubscribe.html", {
+    heading,
+    message,
+    /* ⚠ Empty drops the whole "back to the site" row rather than rendering a
+       button that leads nowhere — see the renderer. */
+    site_url: CONFIG.siteUrl,
+  });
 
 const send = (res, status, body) =>
   res
@@ -187,11 +126,9 @@ router.get(
         res,
         400,
         page({
-          title: "That link did not work",
           heading: "That link did not work",
           message:
             "It may have been cut in half by your email app. Reply to any email from us and we will take you off the list by hand.",
-          cta: backToSite(),
         })
       );
     }
@@ -200,7 +137,6 @@ router.get(
       res,
       200,
       page({
-        title: "You have been unsubscribed",
         heading: "You have been unsubscribed",
         /* ⚠ Says plainly what has NOT stopped. Someone unsubscribing from the
            newsletter has not cancelled their place at an event, and a page that
@@ -208,7 +144,6 @@ router.get(
            not turning up at all. */
         message:
           "You will not receive any more newsletters from Iwan Community. Confirmations for events you have registered for will still be sent \u2014 unsubscribing does not cancel a booking. Changed your mind? You can subscribe again from the footer of the site.",
-        cta: backToSite(),
       })
     );
   })
