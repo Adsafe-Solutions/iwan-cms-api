@@ -61,16 +61,18 @@ export async function sendRegistrationConfirmation({ registration, event }) {
      pointing at localhost, is worse than not offering one. */
   const unsubscribe = unsubscribeUrl(registration.email);
 
-  /* ⚠ THE LINK ITSELF IS ALWAYS REAL AND ALWAYS SENT. A Resend Template has no
-     conditionals, so its unsubscribe block is shown to everybody; handing it an
-     empty value would leave a button pointing at nothing, which is worse than
-     showing it to somebody who never subscribed. The link is right for either —
-     it takes a subscriber off the list, and does nothing for a person who was
-     never on it.
+  /* ⚠ THE LINK IS REAL WHENEVER API_URL IS SET, and Resend Templates have no
+     conditionals — their unsubscribe block shows to everybody regardless, so an
+     EMPTY value there is not "hidden", it is a button whose href is the literal
+     string "". This bit us in production: API_URL went missing, and every
+     confirmation sent through Resend's template shipped a dead button nobody
+     could click. `template` below is gated on `unsubscribe` for exactly this —
+     with no real link, Resend's template is skipped entirely so this file's own
+     renderer runs instead, which DOES know how to drop the row.
 
-     ⚠ `showLink` decides only whether the BUILT-IN message PRINTS the line. It
-     renders in this process, so it can know the answer; a template on Resend's
-     side cannot. The List-Unsubscribe header is on every message regardless. */
+     ⚠ `showLink` decides only whether the BUILT-IN message PRINTS the line —
+     see above, that is now also what protects Resend's template from a dead
+     href. The List-Unsubscribe header is on every message regardless. */
   const showLink = Boolean(unsubscribe) && (await isSubscribed(registration.email));
 
   /* ⚠ Canada's routes are country-prefixed and India's are not — `/ca/events`
@@ -104,7 +106,15 @@ export async function sendRegistrationConfirmation({ registration, event }) {
      template has none, and because the template may not exist. See
      lib/templates.js — a missing or draft template means the code is used, and
      a lookup that fails means the same. */
-  const template = await resolveTemplate("registration", { country });
+  /* ⚠ ONLY LOOKED UP WHEN THERE IS A REAL LINK TO GIVE IT. Resend cannot omit
+     its own unsubscribe row, so a published template used with no `unsubscribe`
+     ships a dead button — see the guard above. Falling back to this file's own
+     render is a worse LOOK for that one send, which is a fair trade against
+     shipping something unclickable in every confirmation until somebody
+     notices. */
+  const template = unsubscribe
+    ? await resolveTemplate("registration", { country })
+    : null;
 
   const body = template
     ? {
