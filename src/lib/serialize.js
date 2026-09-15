@@ -372,6 +372,7 @@ export const adminUser = (doc) => ({
   role: doc.role,
   countries: doc.countries ?? [],
   active: doc.active,
+  master: Boolean(doc.master),
   lastLoginAt: doc.lastLoginAt ?? null,
   createdAt: doc.createdAt,
 });

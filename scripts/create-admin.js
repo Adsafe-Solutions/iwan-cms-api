@@ -7,6 +7,7 @@ const email = (process.env.ADMIN_EMAIL ?? "").trim().toLowerCase();
 const username = (process.env.ADMIN_USERNAME ?? "").trim().toLowerCase();
 const password = process.env.ADMIN_PASSWORD ?? "";
 const name = process.env.ADMIN_NAME ?? "Iwan Admin";
+const master = process.env.ADMIN_MASTER === "1";
 
 async function main() {
   assertConfig();
@@ -42,6 +43,8 @@ async function main() {
       role: "admin",
       active: true,
       countries: [],
+      ...(process.env.ADMIN_NAME ? { name } : {}),
+      ...(master ? { master: true } : {}),
       ...(username ? { username } : {}),
     });
     await existing.save();
@@ -56,6 +59,7 @@ async function main() {
       /* Empty: an admin is unscoped. */
       countries: [],
       active: true,
+      master,
     });
     console.log(
       `[create-admin] created ${email}${username ? ` (sign in as "${username}")` : ""}`

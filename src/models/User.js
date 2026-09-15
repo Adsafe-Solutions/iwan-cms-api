@@ -47,6 +47,10 @@ const userSchema = new mongoose.Schema(
     },
 
     active: { type: Boolean, default: true },
+
+    /* ⚠ The owner account: the API refuses to edit or delete it. Set only by
+       scripts/create-admin.js with ADMIN_MASTER=1. */
+    master: { type: Boolean, default: false },
     lastLoginAt: { type: Date, default: null },
   },
   { timestamps: true }

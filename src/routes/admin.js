@@ -306,6 +306,7 @@ router.patch(
   wrap(async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) throw notFound("No such user");
+    if (user.master) throw badRequest("The master admin cannot be edited here");
 
     const { password, ...rest } = req.body;
 
@@ -343,6 +344,7 @@ router.delete(
     }
     const user = await User.findById(req.params.id);
     if (!user) throw notFound("No such user");
+    if (user.master) throw badRequest("The master admin cannot be deleted");
 
     if (user.role === "admin") {
       const admins = await User.countDocuments({ role: "admin", active: true });
