@@ -9,6 +9,7 @@
     "node": "24.x"
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "seed": "node scripts/seed.js",
