@@ -992,6 +992,56 @@ await check("⚠ a key that is not in the form is dropped, not stored", async ()
   assert.ok(!keys.includes("injected"));
 });
 
+await check(
+  "⚠ a capped event that is full says so publicly and refuses sign-ups",
+  async () => {
+    const ev = await findEvent("fishing-day");
+    const patch = (spots) =>
+      call("PATCH", `/api/admin/events/${ev.id}`, { token, body: { spots } });
+    const listed = async () => {
+      const { body } = await call("GET", "/api/events?country=ca");
+      return body.items.find((e) => e.id === "fishing-day");
+    };
+
+    try {
+      await patch(1);
+      const taken = await call("POST", "/api/events/fishing-day/register?country=ca", {
+        body: { answers: REG({ email: "cap-a@example.com" }) },
+      });
+      /* Earlier checks already left registrations behind, so this one may itself
+       be refused — either way the event is now at or over its single place. */
+      assert.ok([201, 400].includes(taken.status));
+
+      const detail = await call("GET", "/api/events/fishing-day?country=ca");
+      assert.equal(detail.body.full, true, "the detail did not say full");
+      assert.equal((await listed()).full, true, "the card did not say full");
+
+      const refused = await call("POST", "/api/events/fishing-day/register?country=ca", {
+        body: { answers: REG({ email: "cap-b@example.com" }) },
+      });
+      assert.equal(refused.status, 400);
+      assert.ok(
+        refused.body.details.some((d) => d.code === "event_full"),
+        "the refusal carried no machine-readable code"
+      );
+
+      await patch(100000);
+      const open = await call("GET", "/api/events/fishing-day?country=ca");
+      assert.equal(open.body.full, undefined, "room left but still flagged full");
+      assert.equal((await listed()).full, undefined);
+
+      await patch(null);
+      assert.equal(
+        (await listed()).full,
+        undefined,
+        "an uncapped event was flagged full"
+      );
+    } finally {
+      await patch(ev.spots ?? null);
+    }
+  }
+);
+
 await check("a bad email is refused", async () => {
   const { status } = await call("POST", "/api/events/fishing-day/register?country=ca", {
     body: { answers: REG({ email: "not-an-email" }) },

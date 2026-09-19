@@ -32,6 +32,8 @@ src/routes/
 src/lib/
   mail.js, contacts.js, segments.js, templates.js, welcome.js, background.js
                       the Resend system — see resend-email-system skill
+  capacity.js          which registrations use a place; spotsLeft() feeds the
+                      public `full`/`spotsLeft` fields (event capacity, README)
   audience.js          recordAudience() — the ONE way into the audience list
   tokens.js             session JWTs AND signed unsubscribe tokens, kept apart
                       by a `purpose` claim
