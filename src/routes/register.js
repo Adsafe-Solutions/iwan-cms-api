@@ -9,6 +9,7 @@ import { notify, sendRegistrationConfirmation } from "../lib/mail.js";
 import { recordAudience } from "../lib/audience.js";
 import { welcome } from "../lib/welcome.js";
 import { background } from "../lib/background.js";
+import { COUNTED_STATUSES, hasCap } from "../lib/capacity.js";
 import { CONFIG } from "../config.js";
 
 /* The one route the public can WRITE to, and therefore the whole attack surface
@@ -80,14 +81,16 @@ router.post(
        simultaneous submissions can both pass, putting the event one over rather
        than silently losing a sign-up. Over by one is a problem an organiser can
        solve; a dropped registration is not. */
-    if (Number.isFinite(event.spots) && event.spots > 0) {
+    if (hasCap(event)) {
       const taken = await Registration.countDocuments({
         event: event._id,
-        status: { $in: ["new", "confirmed"] },
+        status: { $in: COUNTED_STATUSES },
       });
       if (taken >= event.spots) {
+        /* `code` is what the site keys on to swap the form for its "full"
+           message — the wording above is for humans and may change. */
         throw badRequest("This event is full", [
-          { field: "form", message: "Every place has been taken." },
+          { field: "form", message: "Every place has been taken.", code: "event_full" },
         ]);
       }
     }

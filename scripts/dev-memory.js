@@ -107,6 +107,8 @@ if ((await Event.countDocuments({})) === 0) {
     start: "18:30",
     end: "20:30",
     venue: "Iwan Hall",
+    /* Two places, so the "event is full" state is two registrations away. */
+    spots: 2,
     address: "14 Main Street, Bangalore",
     summary: "Created by dev:memory so the registration form has something to post to.",
     /* The smallest form the API will accept on a published event: it must ask

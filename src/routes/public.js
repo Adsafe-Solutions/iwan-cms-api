@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { Event } from "../models/Event.js";
+import { spotsLeft } from "../lib/capacity.js";
 import { Blog } from "../models/Blog.js";
 import { PodcastEpisode, PodcastShow } from "../models/Podcast.js";
 import { APPLICATION_KINDS } from "../models/Application.js";
@@ -59,8 +60,14 @@ const paged = async (model, where, { sort, skip, limit, page }, serialize) => {
 /* A minute of shared caching takes the steady-state load off Atlas' free tier.
    ⚠ An editor's publish therefore reaches the site within a minute, not
    instantly — worth knowing before someone reports it as a bug. */
-const cacheable = (res) => {
-  res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+const cacheable = (res, live = false) => {
+  /* ⚠ `live` = the response carries a place count. That must never lag: a
+     cached "3 left" sells a place that has gone, and a cached full event keeps
+     an open button. Only events with a cap pay this; everything else caches. */
+  res.set(
+    "Cache-Control",
+    live ? "no-store" : "public, max-age=60, stale-while-revalidate=300"
+  );
 };
 
 /* ⚠ "Upcoming" is decided by the VISITOR's calendar day via `?from=`, not the
@@ -152,7 +159,14 @@ const listEvents = async (req, code, fallbackLimit) => {
     Event.countDocuments(where),
   ]);
 
-  return { items: items.map(publicEventCard), total, page, limit };
+  const left = await spotsLeft(items);
+  const payload = {
+    items: items.map((e) => publicEventCard(e, left.get(String(e._id)))),
+    total,
+    page,
+    limit,
+  };
+  return { payload, live: left.size > 0 };
 };
 
 const listBlogs = (req, code, fallbackLimit) =>
@@ -204,7 +218,7 @@ router.get(
     /* Always page one, whatever ?page= says — that belongs to the lists. */
     const boot = { ...req, query: { ...req.query, page: 1, limit: BOOT_LIMIT } };
 
-    const [events, blogs, episodes, show, promo] = await Promise.all([
+    const [{ payload: events, live }, blogs, episodes, show, promo] = await Promise.all([
       listEvents(boot, country, BOOT_LIMIT),
       listBlogs(boot, country, BOOT_LIMIT),
       listEpisodes(boot, country, BOOT_LIMIT),
@@ -212,7 +226,7 @@ router.get(
       resolvePromo(country),
     ]);
 
-    cacheable(res);
+    cacheable(res, live);
     res.json({
       country,
       events,
@@ -230,9 +244,9 @@ router.get(
 router.get(
   "/events",
   wrap(async (req, res) => {
-    const result = await listEvents(req, askedCountry(req), 12);
-    cacheable(res);
-    res.json(result);
+    const { payload, live } = await listEvents(req, askedCountry(req), 12);
+    cacheable(res, live);
+    res.json(payload);
   })
 );
 
@@ -332,8 +346,9 @@ router.get(
       ...published(askedCountry(req)),
     }).lean();
     if (!event) throw notFound("No such event");
-    cacheable(res);
-    res.json(publicEvent(event));
+    const left = await spotsLeft([event]);
+    cacheable(res, left.size > 0);
+    res.json(publicEvent(event, left.get(String(event._id))));
   })
 );
 
