@@ -86,6 +86,32 @@ API without a single component changing. Which means:
 Responses carry `Cache-Control: max-age=60, stale-while-revalidate=300`, so a
 publish reaches the site within a minute rather than instantly.
 
+⚠ **The exception is an event with a cap (`spots`).** Any response carrying one
+— `/api/events`, `/api/events/:slug`, and `/api/content` when its events
+include one — is sent `Cache-Control: no-store`, because a cached place count
+either sells a place that has gone or leaves a Register button on a full event.
+Events with no cap, and blogs/episodes, still cache.
+
+### Event capacity
+
+An event's `spots` is a cap; blank means unlimited. Public event payloads
+(card and detail) then carry at most one of:
+
+| field          | when                        | meaning                            |
+| -------------- | --------------------------- | ---------------------------------- |
+| `full: true`   | no places left              | the site disables Register         |
+| `spotsLeft: n` | `1 ≤ n ≤ 5` (`LOW_SPOTS`)   | the site says "Only n places left" |
+| neither        | more than 5 left, or no cap | the count stays private            |
+
+Only `new` and `confirmed` registrations use a place — `waitlist` and
+`cancelled` do not (`COUNTED_STATUSES` in `src/lib/capacity.js`, the one
+definition, shared with the admin's "12 of 40" count). The register route
+re-checks at submit time and refuses with `400 "This event is full"` and
+`details[].code === "event_full"`, which the site keys on to flip to its full
+state. ⚠ Counted at submit rather than kept as a running total, so two
+simultaneous sign-ups can put an event one over rather than lose a
+registration.
+
 ## Blog posts are HTML
 
 Posts are written in a rich-text editor and stored as HTML in `html`.

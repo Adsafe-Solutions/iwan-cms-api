@@ -1,4 +1,5 @@
 import { countryOf } from "./countries.js";
+import { LOW_SPOTS } from "./capacity.js";
 
 /* Two shapes, one set of documents. PUBLIC serialisers reproduce the site's
    existing content contract, which is why `id` holds the SLUG. ADMIN serialisers
@@ -20,7 +21,16 @@ const compact = (obj) =>
    these. A card is a strict SUBSET of a detail, so a component written against
    one keeps working if handed the other. */
 
-export const publicEventCard = (doc) =>
+/* `left` is places remaining, or undefined when the event has no cap. Only two
+   shapes ever leave the API: `full: true`, or `spotsLeft: n` when few remain. */
+const availability = (left) =>
+  left === 0
+    ? { full: true }
+    : left !== undefined && left <= LOW_SPOTS
+      ? { spotsLeft: left }
+      : {};
+
+export const publicEventCard = (doc, left) =>
   compact({
     id: doc.slug,
     country: countryOf(doc.countries),
@@ -40,6 +50,9 @@ export const publicEventCard = (doc) =>
     /* ⚠ Not the form itself — only whether there IS one, so a card can show a
        Register button without fetching the whole event. */
     ...(doc.form?.length ? { hasForm: true } : {}),
+    /* ⚠ Absent means "plenty of places, or no cap". Decided by
+       lib/capacity.js so it matches what the register route will accept. */
+    ...availability(left),
   });
 
 /* ⚠ No `html`. That is the entire reason this exists. */
@@ -54,12 +67,13 @@ export const publicBlogCard = (doc) =>
     excerpt: doc.excerpt,
   });
 
-export const publicEvent = (doc) =>
+export const publicEvent = (doc, left) =>
   compact({
     id: doc.slug,
     country: countryOf(doc.countries),
     kind: doc.kind,
     spots: doc.spots,
+    ...availability(left),
     admission: doc.admission || "free",
     address: doc.address,
     title: doc.title,

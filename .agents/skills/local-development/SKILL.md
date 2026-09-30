@@ -20,7 +20,8 @@ npm run dev:memory   # throwaway in-memory DB instead
 ```
 
 `dev:memory` also creates+**activates** the volunteer/career apply-forms
-(they ship inactive by design) and one demo event — without this there is
+(they ship inactive by design) and one demo event (capped at **2 spots**, so "full" is two sign-ups away —
+restart to reset) — without this there is
 nothing to register for on a fresh database.
 
 ## Running the site against it
